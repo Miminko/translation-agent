@@ -109,3 +109,21 @@ Return:
 ```
 - Repair Agent: if critic flags issues -> regenerate translation with feedback.
 - Creates loop: translate -> critique -> re-check
+
+
+SETUP INSTRUCTIONS:
+1. `brew install ffmpeg yt-dlp`
+2. `python3 -m venv .venv && source .venv/bin/activate`
+3. `pip install -r requirements.txt`
+
+
+TODO:
+- upload to github repo
+- generate architecture diagram
+- setup intructions to run locally
+- example input/outputs
+- explanation of how it works
+- /examples folder with real transcripts and translations
+- logs of agent decisions
+- record demo video
+- host HuggingFace spaces, vercel SPA

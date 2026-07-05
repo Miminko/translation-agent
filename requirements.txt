@@ -1,0 +1,8 @@
+openai
+yt-dlp
+fastapi
+uvicorn[standard]
+streamlit
+pydantic
+pydantic-settings
+python-dotenv
