@@ -112,9 +112,35 @@ Return:
 
 
 SETUP INSTRUCTIONS:
-1. `brew install ffmpeg yt-dlp`
+1. `brew install ffmpeg yt-dlp ollama`
 2. `python3 -m venv .venv && source .venv/bin/activate`
 3. `pip install -r requirements.txt`
+4. `ollama serve`
+5. `ollama pull qwen2.5:14b`
+6. `ollama run qwen2.5:14b` (needs 16GB+ RAM, 10 min video should take ~10 minutes)
+
+SETTING UP & TESTING LOCAL MODELS:
+- I've opted for free local models since I'm cheap.
+- Run `ollama serve` to spin up server in a separate terminal
+- Run `ollama pull qwen2.5:14b` to download 14 billion param Qwen model
+- Run `ollama run qwen2.5:14b` to test model within terminal
+- Run curl command to API to test HTTP requests:
+```bash
+curl http://localhost:11434/api/chat -d '{
+  "model": "qwen2.5:14b",
+  "messages": [{"role": "user", "content": "Translate to English: こんにちは、元気ですか？"}],
+  "stream": false
+}'
+```
+- To test local Whisper model:
+```bash
+python -c "
+from faster_whisper import WhisperModel
+print('Downloading model on first run...')
+m = WhisperModel('small', device='cpu', compute_type='int8')
+print('Ready:', m)
+"
+```
 
 
 TODO:
