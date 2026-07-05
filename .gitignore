@@ -1,0 +1,7 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+data/           # job artifacts (audio, transcripts, outputs)
+*.wav
+.DS_Store
