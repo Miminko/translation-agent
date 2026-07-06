@@ -19,7 +19,7 @@ Challenges:
 High Level:
 - Youtube Downloader
 - Audio Extractor
-- Speech to Japanese (Whisper API)
+- Speech to Japanese
 - Segmentation Agent (chunk + align timestamps)
 - Translation Agent (JA -> EN)
 - QA Agent (consistency checks, missing meaning detection, hallucination risk scoring)
@@ -37,11 +37,11 @@ High Level:
 
 Tech Stack:
 - Python
-- OpenAI API (or Whisper + GPT-4.1 / GPT-5-mini class model)
+- Qwen (Ollama) + faster-whisper (local, free)
 - yt-dlp (youtube download)
 - ffmpeg (audio extraction)
-- LangGraph (agent framework)
-- React + FastAPI backend
+- LangGraph (agent framework, phase 2)
+- Streamlit + FastAPI
 
 MVP: Deterministic Pipeline
 1. Download video + extract audio
@@ -50,43 +50,11 @@ yt-dlp -x --audio-format mp3 <youtube_url>
 ```
 
 2. Transcribe Japanese
-```python
-from openai import OpenAI
-client = OpenAI()
-
-audio_file = open("audio.mp3", "rb")
-
-transcript = client.audio.transcriptions.create(
-    model="whisper-1",
-    file=audio_file,
-    language="ja",
-    response_format="verbose_json"
-)
-```
 
 3. Segment normalization
 Group meaningful chunks (sentence boundaries).
 
 4. Translation (baseline)
-For each segment:
-```python
-def translate_segment(text):
-    return client.responses.create(
-        model="gpt-4.1-mini",
-        input=f"""
-Translate Japanese → natural English.
-
-Rules:
-- preserve meaning, not literal structure
-- keep tone (formal/informal)
-- preserve names
-- do NOT add explanations
-
-Text:
-{text}
-"""
-    )
-```
 
 5. Output aligned file
 Generate as Google Doc format:
@@ -115,9 +83,11 @@ SETUP INSTRUCTIONS:
 1. `brew install ffmpeg yt-dlp ollama`
 2. `python3 -m venv .venv && source .venv/bin/activate`
 3. `pip install -r requirements.txt`
-4. `ollama serve`
-5. `ollama pull qwen2.5:14b`
-6. `ollama run qwen2.5:14b` (needs 16GB+ RAM, 10 min video should take ~10 minutes)
+4. `cp .env.example .env` and adjust model names if needed
+5. `ollama serve` (separate terminal)
+6. `ollama pull qwen2.5:14b` (or `qwen2.5:7b` on 8GB RAM)
+7. `python scripts/smoke_test.py` — verifies config + Ollama translation
+8. `python scripts/smoke_test.py --audio path/to/audio.wav` — also tests Whisper
 
 SETTING UP & TESTING LOCAL MODELS:
 - I've opted for free local models since I'm cheap.
