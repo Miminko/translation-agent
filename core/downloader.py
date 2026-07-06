@@ -31,7 +31,7 @@ def fetch_metadata(video_url: str) -> VideoMetadata:
     )
 
 
-def download(video_url: str, output_dir: Path) -> DownloadResult:
+def download(video_url: str, output_dir: Path, *, show_progress: bool = False) -> DownloadResult:
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("Required tool not found on PATH: ffmpeg")
 
@@ -40,13 +40,17 @@ def download(video_url: str, output_dir: Path) -> DownloadResult:
     output_template = str(output_dir / "audio.%(ext)s")
     run_yt_dlp(
         [
+            # Audio only — avoid downloading multi-GB video streams (common on Vimeo).
+            "-f",
+            "bestaudio/best",
             "-x",
             "--audio-format",
             "wav",
             "-o",
             output_template,
             video_url,
-        ]
+        ],
+        show_progress=show_progress,
     )
 
     audio_candidates = sorted(output_dir.glob("audio.*"))

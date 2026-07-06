@@ -41,16 +41,20 @@ def ytdlp_auth_args() -> List[str]:
     return args
 
 
-def run_yt_dlp(args: List[str]) -> subprocess.CompletedProcess:
+def run_yt_dlp(args: List[str], *, show_progress: bool = False) -> subprocess.CompletedProcess:
     _require_tool("yt-dlp")
     full_args = [*ytdlp_auth_args(), *args]
-    result = subprocess.run(
-        ["yt-dlp", *full_args],
-        capture_output=True,
-        text=True,
-    )
+    if show_progress:
+        full_args = ["--progress", "--newline", *full_args]
+        result = subprocess.run(["yt-dlp", *full_args], text=True)
+    else:
+        result = subprocess.run(
+            ["yt-dlp", *full_args],
+            capture_output=True,
+            text=True,
+        )
     if result.returncode != 0:
-        stderr = result.stderr.strip() or result.stdout.strip()
+        stderr = (result.stderr or "").strip() or (result.stdout or "").strip()
         for line in stderr.splitlines():
             if line.startswith("ERROR:"):
                 raise RuntimeError(f"yt-dlp failed: {line}")

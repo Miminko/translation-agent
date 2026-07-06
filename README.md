@@ -91,8 +91,11 @@ SETUP INSTRUCTIONS:
 
 RUNNING JOBS:
 ```bash
-# CLI — process a YouTube URL end-to-end
+# CLI — process a video URL end-to-end (progress bar on by default)
 python -m pipeline.cli run "https://www.youtube.com/watch?v=VIDEO_ID"
+python -m pipeline.cli run -v "URL"          # yt-dlp logs instead of progress bar
+python -m pipeline.cli run --no-progress "URL"
+python -m pipeline.cli watch <job_id>        # follow a job started elsewhere
 python -m pipeline.cli list
 python -m pipeline.cli status <job_id>
 
