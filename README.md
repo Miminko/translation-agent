@@ -89,6 +89,27 @@ SETUP INSTRUCTIONS:
 7. `python scripts/smoke_test.py` — verifies config + Ollama translation
 8. `python scripts/smoke_test.py --audio path/to/audio.wav` — also tests Whisper
 
+RUNNING JOBS:
+```bash
+# CLI — process a YouTube URL end-to-end
+python -m pipeline.cli run "https://www.youtube.com/watch?v=VIDEO_ID"
+python -m pipeline.cli list
+python -m pipeline.cli status <job_id>
+
+# API
+uvicorn app.main:app --reload
+# POST /jobs  {"youtube_url": "..."}
+# GET  /jobs/{job_id}
+
+# Streamlit review UI
+streamlit run app/streamlit_app.py
+```
+
+Outputs are written to `data/jobs/<job_id>/`:
+- `output.txt` — aligned JA/EN blocks
+- `output.json` — machine-readable segments + flags
+- `output.ja.srt` / `output.en.srt` — subtitles
+
 SETTING UP & TESTING LOCAL MODELS:
 - I've opted for free local models since I'm cheap.
 - Run `ollama serve` to spin up server in a separate terminal

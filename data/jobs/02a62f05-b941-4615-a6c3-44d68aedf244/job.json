@@ -1,0 +1,12 @@
+{
+  "id": "02a62f05-b941-4615-a6c3-44d68aedf244",
+  "youtube_url": "https://vimeo.com/1205070956/e8cfb77b78?share=copy&fl=cl&fe=ci",
+  "status": "failed",
+  "error": "yt-dlp failed: /Users/naomi/Desktop/dev/agentic-experiments/translation-agent/.venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020\n  warnings.warn(\nDeprecated Feature: Support for Python version 3.9 has been deprecated. Please update to Python 3.10 or above\nERROR: [vimeo] 1205070956: The web client only works when logged-in. Use --cookies, --cookies-from-browser, --username and --password, --netrc-cmd, or --netrc (vimeo) to provide account credentials. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies",
+  "segments": [],
+  "audio_path": null,
+  "video_title": null,
+  "video_description": null,
+  "created_at": "2026-07-06T21:13:23.441334Z",
+  "updated_at": "2026-07-06T21:13:25.146175Z"
+}

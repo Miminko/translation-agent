@@ -22,8 +22,10 @@ class Settings(BaseSettings):
     local_whisper_model: str = "large-v3"
     ollama_model: str = "qwen2.5:14b"
     ollama_base_url: str = "http://localhost:11434"
+    ytdlp_cookies_from_browser: Optional[str] = None  # e.g. chrome, safari, firefox
+    ytdlp_cookies_file: Optional[str] = None          # path to Netscape cookies.txt
 
-    @field_validator("openai_api_key", mode="before")
+    @field_validator("openai_api_key", "ytdlp_cookies_from_browser", "ytdlp_cookies_file", mode="before")
     @classmethod
     def empty_str_to_none(cls, value: Optional[str]) -> Optional[str]:
         if value is None or str(value).strip() == "":
