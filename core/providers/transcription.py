@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Optional, Protocol
 
 from config import settings
+from log_utils import log as _log
 
 _whisper_model = None
 _whisper_model_name: Optional[str] = None
@@ -13,10 +13,6 @@ _whisper_model_name: Optional[str] = None
 class Transcriber(Protocol):
     def transcribe(self, audio_path: Path) -> dict:
         """Return verbose_json-shaped dict with a segments list."""
-
-
-def _log(message: str) -> None:
-    print(message, file=sys.stderr, flush=True)
 
 
 def _fmt_ts(seconds: float) -> str:

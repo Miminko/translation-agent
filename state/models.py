@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class SegmentSource(str, Enum):
@@ -41,8 +41,12 @@ class JobStatus(str, Enum):
 
 
 class Job(BaseModel):
+    # populate_by_name + the youtube_url alias keep older persisted job.json
+    # files (which used ``youtube_url``) loadable after the rename to source_url.
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str
-    youtube_url: str
+    source_url: str = Field(validation_alias=AliasChoices("source_url", "youtube_url"))
     status: JobStatus
     error: Optional[str] = None
     segments: List[Segment] = Field(default_factory=list)

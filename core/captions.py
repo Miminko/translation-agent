@@ -40,7 +40,7 @@ def parse_vtt(path: Path) -> List[CaptionCue]:
         if not lines:
             continue
         if lines[0].startswith("WEBVTT") or lines[0].isdigit():
-            lines = lines[1:] if lines[0].startswith("WEBVTT") else lines[1:]
+            lines = lines[1:]
         if not lines:
             continue
         if "-->" not in lines[0]:
@@ -73,7 +73,7 @@ def _download_subs(video_url: str, output_dir: Path, auto: bool) -> Optional[Pat
     except RuntimeError:
         return None
 
-    for pattern in ("captions.ja.vtt", "captions.ja.srt", "captions.ja.*"):
+    for pattern in ("captions.ja.vtt", "captions.ja.srt"):
         matches = list(output_dir.glob(pattern))
         if matches:
             return matches[0]

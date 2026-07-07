@@ -131,7 +131,7 @@ def get_or_fetch_captions(
     caption_list = captions.fetch_japanese_captions(video_url, job_dir)
     if caption_list:
         cache.mkdir(parents=True, exist_ok=True)
-        for path in job_dir.glob("captions*"):
+        for path in job_dir.glob("captions.ja.*"):
             if path.is_file():
                 shutil.copy2(path, cache / path.name)
     return caption_list, False

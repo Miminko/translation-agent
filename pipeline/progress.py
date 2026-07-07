@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+from config import settings
 from state import store
 from state.models import Job, JobStatus
 
@@ -70,9 +71,13 @@ def format_job_progress(job: Job, *, elapsed: Optional[float] = None) -> str:
     extras: list[str] = []
 
     if job.status == JobStatus.downloading:
-        downloaded = _partial_download_bytes(store.job_dir(job.id))
-        if downloaded:
-            extras.append(_format_bytes(downloaded))
+        # Use the settings path directly to avoid store.job_dir() creating the
+        # directory as a side effect inside this read-only formatting function.
+        job_dir_path = settings.data_path / "jobs" / job.id
+        if job_dir_path.is_dir():
+            downloaded = _partial_download_bytes(job_dir_path)
+            if downloaded:
+                extras.append(_format_bytes(downloaded))
 
     if job.status == JobStatus.translating and job.segments:
         total = len(job.segments)
@@ -81,8 +86,23 @@ def format_job_progress(job: Job, *, elapsed: Optional[float] = None) -> str:
         percent = start_pct + int((translated / total) * (89 - start_pct)) if total else start_pct
         extras.append(f"{translated}/{total} translated")
     elif job.status == JobStatus.refining and job.segments:
-        total = len(job.segments)
-        reviewed = sum(1 for segment in job.segments if segment.translation_confidence is not None)
+        # In flagged_only mode only the heuristic candidates get critiqued, so
+        # measuring progress against every segment would barely move the bar.
+        from core import qa
+
+        if settings.refinement_critique_mode == "all":
+            scope_ids = {segment.id for segment in job.segments}
+        else:
+            scope_ids = qa.refinement_candidates(job.segments)
+        total = len(scope_ids) or len(job.segments)
+        reviewed = min(
+            total,
+            sum(
+                1
+                for segment in job.segments
+                if segment.id in scope_ids and segment.translation_confidence is not None
+            ),
+        )
         start_pct, _ = STATUS_PROGRESS[JobStatus.refining]
         percent = start_pct + int((reviewed / total) * (99 - start_pct)) if total else start_pct
         extras.append(f"{reviewed}/{total} critiqued")
@@ -139,12 +159,14 @@ def watch_job(
 def run_in_background(
     target: Callable[[], Job],
     done_event: Optional[threading.Event] = None,
-) -> tuple[threading.Thread, dict[str, Job]]:
-    result: dict[str, Job] = {}
+) -> tuple[threading.Thread, dict]:
+    result: dict = {}
 
     def worker() -> None:
         try:
             result["job"] = target()
+        except Exception as exc:
+            result["exc"] = exc
         finally:
             if done_event is not None:
                 done_event.set()
@@ -164,4 +186,6 @@ def run_with_progress(job_runner: Callable[[], Job], job_id: str) -> Job:
     thread, result = run_in_background(job_runner, done_event=done)
     watch_job(job_id, stop_event=done)
     thread.join()
+    if "exc" in result:
+        raise result["exc"]
     return result["job"]

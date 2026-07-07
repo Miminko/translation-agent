@@ -28,7 +28,7 @@ def test_create_job_without_auto_start(client: TestClient, tmp_data_dir) -> None
     body = response.json()
     assert body["status"] == JobStatus.pending.value
     job = store.load_job(body["job_id"])
-    assert job.youtube_url == "https://vimeo.com/501"
+    assert job.source_url == "https://vimeo.com/501"
 
 
 def test_get_job_not_found(client: TestClient, tmp_data_dir) -> None:
@@ -70,6 +70,83 @@ def test_update_review_segments(client: TestClient, tmp_data_dir) -> None:
     loaded = store.load_review_segments(job.id)
     assert loaded is not None
     assert loaded[0].japanese == "編集済み"
+
+
+def test_update_review_segments_rejects_empty_list(
+    client: TestClient, tmp_data_dir
+) -> None:
+    job = store.create_job("https://vimeo.com/6031")
+
+    response = client.put(f"/jobs/{job.id}/segments", json=[])
+
+    assert response.status_code == 400
+    assert "At least one segment" in response.json()["detail"]
+
+
+def test_update_review_segments_rejects_duplicate_ids(
+    client: TestClient, tmp_data_dir
+) -> None:
+    job = store.create_job("https://vimeo.com/6032")
+    payload = [
+        {
+            "id": 1,
+            "start": 0.0,
+            "end": 1.0,
+            "japanese": "一つ目",
+        },
+        {
+            "id": 1,
+            "start": 1.0,
+            "end": 2.0,
+            "japanese": "二つ目",
+        },
+    ]
+
+    response = client.put(f"/jobs/{job.id}/segments", json=payload)
+
+    assert response.status_code == 400
+    assert "Duplicate segment" in response.json()["detail"]
+
+
+def test_update_review_segments_rejects_invalid_source(
+    client: TestClient, tmp_data_dir
+) -> None:
+    job = store.create_job("https://vimeo.com/6034")
+    payload = [
+        {
+            "id": 1,
+            "start": 0.0,
+            "end": 1.0,
+            "japanese": "一つ目",
+            "source": "invalid",
+        },
+    ]
+
+    response = client.put(f"/jobs/{job.id}/segments", json=payload)
+
+    assert response.status_code == 400
+
+
+def test_update_review_segments_rejects_running_job(
+    client: TestClient, tmp_data_dir
+) -> None:
+    job = store.create_job("https://vimeo.com/6033")
+    job.status = JobStatus.translating
+    store.save_job(job)
+
+    response = client.put(
+        f"/jobs/{job.id}/segments",
+        json=[
+            {
+                "id": 1,
+                "start": 0.0,
+                "end": 1.0,
+                "japanese": "編集中",
+            }
+        ],
+    )
+
+    assert response.status_code == 409
 
 
 def test_get_review_segments_when_ready(client: TestClient, tmp_data_dir) -> None:
@@ -166,3 +243,33 @@ def test_get_output_not_ready(client: TestClient, tmp_data_dir) -> None:
     job = store.create_job("https://vimeo.com/609")
     response = client.get(f"/jobs/{job.id}/output")
     assert response.status_code == 404
+
+
+def test_start_transcription_conflict_when_locked(
+    client: TestClient, tmp_data_dir
+) -> None:
+    job = store.create_job("https://vimeo.com/611")
+    store.acquire_job_lock(job.id)  # another runner already holds the claim
+
+    response = client.post(f"/jobs/{job.id}/transcribe")
+
+    assert response.status_code == 409
+
+
+def test_launch_releases_lock_when_start_fails(
+    client: TestClient, tmp_data_dir, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.main as main
+
+    job = store.create_job("https://vimeo.com/612")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(main, "_mark_started", boom)
+
+    with pytest.raises(RuntimeError):
+        client.post(f"/jobs/{job.id}/run")
+
+    # The synchronously-acquired lock must not leak on a failed start.
+    assert store.is_job_locked(job.id) is False

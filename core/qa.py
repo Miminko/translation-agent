@@ -11,15 +11,13 @@ def _heuristic_flags(segment: Segment) -> List[str]:
         flags.append("low_confidence")
     if segment.translation_confidence is not None and segment.translation_confidence < 0.7:
         flags.append("low_translation_confidence")
-    if segment.english is not None:
+    if not segment.english:
+        flags.append("empty_translation")
+    else:
         ja_len = len(segment.japanese.strip())
         en_len = len(segment.english.strip())
         if ja_len > 0 and en_len > ja_len * 2.5:
             flags.append("length_anomaly")
-        if en_len == 0:
-            flags.append("empty_translation")
-    elif not segment.english:
-        flags.append("empty_translation")
     if len(segment.japanese.strip()) < 2:
         flags.append("very_short")
     return flags

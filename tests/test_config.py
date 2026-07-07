@@ -6,7 +6,7 @@ from config import Settings, check_runtime_dependencies
 
 
 def test_settings_defaults() -> None:
-    cfg = Settings(data_dir="/tmp/test-data")
+    cfg = Settings(_env_file=None, data_dir="/tmp/test-data")
     assert cfg.transcription_backend == "mlx"
     assert cfg.translation_backend == "ollama"
     assert cfg.use_artifact_cache is True
@@ -14,6 +14,7 @@ def test_settings_defaults() -> None:
 
 def test_settings_empty_str_to_none() -> None:
     cfg = Settings(
+        _env_file=None,
         data_dir="/tmp/test-data",
         openai_api_key="",
         ytdlp_cookies_from_browser="  ",
@@ -30,6 +31,7 @@ def test_settings_requires_openai_key_for_openai_backend(monkeypatch: pytest.Mon
 
 def test_active_whisper_model_mlx() -> None:
     cfg = Settings(
+        _env_file=None,
         data_dir="/tmp/test-data",
         transcription_backend="mlx",
         mlx_whisper_model="mlx-community/whisper-large-v3-turbo",
@@ -39,6 +41,7 @@ def test_active_whisper_model_mlx() -> None:
 
 def test_active_whisper_model_local() -> None:
     cfg = Settings(
+        _env_file=None,
         data_dir="/tmp/test-data",
         transcription_backend="local",
         local_whisper_model="large-v3-turbo",
@@ -51,6 +54,6 @@ def test_check_runtime_dependencies_ollama_unreachable(monkeypatch: pytest.Monke
         raise OSError("connection refused")
 
     monkeypatch.setattr("config.urlopen", fake_urlopen)
-    cfg = Settings(data_dir="/tmp/test-data", translation_backend="ollama")
+    cfg = Settings(_env_file=None, data_dir="/tmp/test-data", translation_backend="ollama")
     with pytest.raises(RuntimeError, match="Ollama not reachable"):
         check_runtime_dependencies(cfg)

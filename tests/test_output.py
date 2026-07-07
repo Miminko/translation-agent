@@ -11,6 +11,10 @@ def test_format_timestamp() -> None:
     assert _format_timestamp(3661.5) == "01:01:01,500"
 
 
+def test_format_timestamp_rolls_over_rounded_millis() -> None:
+    assert _format_timestamp(1.9996) == "00:00:02,000"
+
+
 def test_format_display_timestamp() -> None:
     assert _format_display_timestamp(3661.5) == "01:01:01"
 

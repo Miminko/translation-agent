@@ -1,23 +1,20 @@
 from __future__ import annotations
 
-import sys
 import time
 import traceback
+from pathlib import Path
 from typing import Optional
 
 from config import settings
 from core import cache, merger, output, qa, segmenter
 from core.providers.transcription import unload_whisper_model
+from log_utils import log as _log
 from state.models import Job, JobStatus
 from state import store
 from agents import translator as translation_agent
 
 
-def _log(message: str) -> None:
-    print(message, file=sys.stderr, flush=True)
-
-
-def _record_failure(job: Job, job_dir, exc: Exception, *, verbose: bool) -> None:
+def _record_failure(job: Job, job_dir: Path, exc: Exception, *, verbose: bool) -> None:
     job.status = JobStatus.failed
     job.error = str(exc)
     (job_dir / "error.log").write_text(traceback.format_exc(), encoding="utf-8")
@@ -26,23 +23,24 @@ def _record_failure(job: Job, job_dir, exc: Exception, *, verbose: bool) -> None
         _log(f"[{job.id}] Traceback written to {job_dir / 'error.log'}")
 
 
-def run_transcription(job_id: str, *, verbose: bool = False) -> Job:
+def _run_transcription_unlocked(job_id: str, *, verbose: bool = False) -> Job:
     """Phase 1: download + transcribe + segment, then pause for review.
 
     Writes an editable `segments.json` and leaves the job in the `transcribed`
     state so the transcript can be reviewed/edited before translation.
     """
-    job = store.load_job(job_id)
+    job: Optional[Job] = None
     job_dir = store.job_dir(job_id)
 
     try:
+        job = store.load_job(job_id)
         job.status = JobStatus.downloading
         store.save_job(job)
         if verbose:
             _log(f"[{job_id}] Downloading audio...")
 
         dl, audio_cached = cache.get_or_download_audio(
-            job.youtube_url, job_dir, show_progress=verbose
+            job.source_url, job_dir, show_progress=verbose
         )
         job.audio_path = str(dl.audio_path)
         job.video_title = dl.metadata.title
@@ -57,7 +55,7 @@ def run_transcription(job_id: str, *, verbose: bool = False) -> Job:
         if verbose:
             _log(f"[{job_id}] Transcribing (captions + whisper)...")
 
-        caption_list, captions_cached = cache.get_or_fetch_captions(job.youtube_url, job_dir)
+        caption_list, captions_cached = cache.get_or_fetch_captions(job.source_url, job_dir)
         whisper_result = None
         whisper_cached = False
         run_whisper = settings.whisper_mode == "always"
@@ -66,7 +64,7 @@ def run_transcription(job_id: str, *, verbose: bool = False) -> Job:
             run_whisper = coverage < 0.95
         if run_whisper or not caption_list:
             whisper_result, whisper_cached = cache.get_or_transcribe(
-                dl.audio_path, job.youtube_url, job_dir
+                dl.audio_path, job.source_url, job_dir
             )
             unload_whisper_model()
         if verbose:
@@ -95,21 +93,29 @@ def run_transcription(job_id: str, *, verbose: bool = False) -> Job:
             _log(f"[{job_id}] Review/edit: {review_path}")
             _log(f"[{job_id}] Then run: python -m pipeline.cli translate {job_id}")
     except Exception as exc:
+        if job is None:
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / "error.log").write_text(traceback.format_exc(), encoding="utf-8")
+            if verbose:
+                _log(f"[{job_id}] Failed before job could be loaded: {exc}")
+            raise
         _record_failure(job, job_dir, exc, verbose=verbose)
     finally:
-        store.save_job(job)
+        if job is not None:
+            store.save_job(job)
 
     return job
 
 
-def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:
+def _run_translation_unlocked(job_id: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:
     """Phase 2: translate reviewed segments, optional critic/repair loop, write outputs."""
     from agents import refinement as refinement_agent
 
-    job = store.load_job(job_id)
+    job: Optional[Job] = None
     job_dir = store.job_dir(job_id)
 
     try:
+        job = store.load_job(job_id)
         reviewed = store.load_review_segments(job_id)
         if reviewed is not None:
             job.segments = reviewed
@@ -126,12 +132,12 @@ def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool
         if verbose:
             _log(f"[{job_id}] Translating {len(job.segments)} segments...")
 
-        translation_cache = cache.load_translation_cache(job.youtube_url)
+        translation_cache = cache.load_translation_cache(job.source_url)
         if verbose and translation_cache:
             _log(f"[{job_id}] Loaded {len(translation_cache)} cached translation windows")
 
         def _save_cache(data: dict) -> None:
-            cache.save_translation_cache(job.youtube_url, data)
+            cache.save_translation_cache(job.source_url, data)
 
         last_save = [0.0]
 
@@ -143,6 +149,11 @@ def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool
             job.segments = segments
             store.save_job(job)
 
+        active_model = (
+            settings.ollama_model
+            if settings.translation_backend == "ollama"
+            else settings.translation_model
+        )
         job.segments = translation_agent.translate_segments(
             job.segments,
             job,
@@ -150,7 +161,7 @@ def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool
             on_progress=_on_translation_progress,
             cache=translation_cache,
             cache_save=_save_cache,
-            cache_model=settings.ollama_model,
+            cache_model=active_model,
         )
 
         use_refinement = settings.refinement_enabled if refine is None else refine
@@ -195,19 +206,49 @@ def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool
         if verbose:
             _log(f"[{job_id}] Completed. Output: {job_dir / 'output.txt'}")
     except Exception as exc:
+        if job is None:
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / "error.log").write_text(traceback.format_exc(), encoding="utf-8")
+            if verbose:
+                _log(f"[{job_id}] Failed before job could be loaded: {exc}")
+            raise
         _record_failure(job, job_dir, exc, verbose=verbose)
     finally:
-        store.save_job(job)
+        if job is not None:
+            store.save_job(job)
 
     return job
 
 
-def run_job(job_id: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:
+def run_transcription(job_id: str, *, verbose: bool = False, lock_token: Optional[str] = None) -> Job:
+    with store.job_lock(job_id, token=lock_token):
+        return _run_transcription_unlocked(job_id, verbose=verbose)
+
+
+def run_translation(
+    job_id: str,
+    *,
+    verbose: bool = False,
+    refine: Optional[bool] = None,
+    lock_token: Optional[str] = None,
+) -> Job:
+    with store.job_lock(job_id, token=lock_token):
+        return _run_translation_unlocked(job_id, verbose=verbose, refine=refine)
+
+
+def run_job(
+    job_id: str,
+    *,
+    verbose: bool = False,
+    refine: Optional[bool] = None,
+    lock_token: Optional[str] = None,
+) -> Job:
     """Full pipeline: transcription then translation, without a review pause."""
-    job = run_transcription(job_id, verbose=verbose)
-    if job.status == JobStatus.failed:
-        return job
-    return run_translation(job_id, verbose=verbose, refine=refine)
+    with store.job_lock(job_id, token=lock_token):
+        job = _run_transcription_unlocked(job_id, verbose=verbose)
+        if job.status == JobStatus.failed:
+            return job
+        return _run_translation_unlocked(job_id, verbose=verbose, refine=refine)
 
 
 def create_and_run(youtube_url: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:

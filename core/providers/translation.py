@@ -12,23 +12,6 @@ class Translator(Protocol):
         """Translate Japanese text to English."""
 
 
-def translate_ollama(
-    text: str,
-    *,
-    model: str,
-    base_url: str,
-    system_prompt: Optional[str] = None,
-) -> str:
-    client = ollama.Client(host=base_url)
-    messages: list[dict[str, str]] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": text})
-
-    response = client.chat(model=model, messages=messages)
-    return response["message"]["content"]
-
-
 def translate_openai(text: str, *, system_prompt: Optional[str] = None) -> str:
     raise NotImplementedError(
         "OpenAI translation backend is not implemented yet. "
@@ -39,15 +22,15 @@ def translate_openai(text: str, *, system_prompt: Optional[str] = None) -> str:
 class OllamaTranslator:
     def __init__(self, model: str, base_url: str) -> None:
         self.model = model
-        self.base_url = base_url
+        self._client = ollama.Client(host=base_url)
 
     def translate(self, text: str, *, system_prompt: Optional[str] = None) -> str:
-        return translate_ollama(
-            text,
-            model=self.model,
-            base_url=self.base_url,
-            system_prompt=system_prompt,
-        )
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": text})
+        response = self._client.chat(model=self.model, messages=messages)
+        return response["message"]["content"]
 
 
 class OpenAITranslator:

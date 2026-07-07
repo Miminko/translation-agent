@@ -115,7 +115,7 @@ def _rows_to_segments(rows: list[dict]) -> list[Segment]:
 
 def _render_results(job) -> None:
     st.subheader(job.video_title or "Results")
-    st.markdown(f"[Video URL]({job.youtube_url})")
+    st.markdown(f"[Video URL]({job.source_url})")
 
     flagged = [segment for segment in job.segments if segment.flags]
     avg_confidence = [
@@ -280,7 +280,7 @@ def main() -> None:
         jobs = store.list_jobs()
         if jobs:
             labels = [
-                f"{job.status.value} | {job.video_title or job.youtube_url[:40]}"
+                f"{job.status.value} | {job.video_title or job.source_url[:40]}"
                 for job in jobs
             ]
             selected = st.selectbox(

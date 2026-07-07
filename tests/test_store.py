@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from state import store
@@ -9,16 +12,23 @@ from state.models import JobStatus, Segment, SegmentSource
 def test_create_and_load_job(tmp_data_dir) -> None:
     job = store.create_job("https://vimeo.com/42")
     assert job.status == JobStatus.pending
-    assert job.youtube_url == "https://vimeo.com/42"
+    assert job.source_url == "https://vimeo.com/42"
 
     loaded = store.load_job(job.id)
     assert loaded.id == job.id
-    assert loaded.youtube_url == job.youtube_url
+    assert loaded.source_url == job.source_url
 
 
 def test_load_job_missing_raises(tmp_data_dir) -> None:
     with pytest.raises(FileNotFoundError):
         store.load_job("nonexistent-id")
+
+
+def test_load_job_invalid_id_does_not_create_directory(tmp_data_dir) -> None:
+    with pytest.raises(FileNotFoundError):
+        store.load_job("../../outside")
+
+    assert not (tmp_data_dir / "jobs").exists()
 
 
 def test_save_job_updates_timestamp(tmp_data_dir) -> None:
@@ -29,6 +39,76 @@ def test_save_job_updates_timestamp(tmp_data_dir) -> None:
     reloaded = store.load_job(job.id)
     assert reloaded.status == JobStatus.downloading
     assert reloaded.updated_at >= original_updated
+
+
+def test_job_lock_blocks_concurrent_runner(tmp_data_dir) -> None:
+    job = store.create_job("https://vimeo.com/lock")
+
+    with store.job_lock(job.id):
+        assert store.is_job_locked(job.id) is True
+        with pytest.raises(store.JobLockError):
+            with store.job_lock(job.id):
+                pass
+
+    assert store.is_job_locked(job.id) is False
+
+
+def test_acquire_lock_is_exclusive_and_releases(tmp_data_dir) -> None:
+    job = store.create_job("https://vimeo.com/claim")
+
+    token = store.acquire_job_lock(job.id)
+    assert store.is_job_locked(job.id) is True
+    with pytest.raises(store.JobLockError):
+        store.acquire_job_lock(job.id)
+
+    store.release_job_lock(job.id, token)
+    assert store.is_job_locked(job.id) is False
+
+
+def test_job_lock_accepts_prelocked_token(tmp_data_dir) -> None:
+    job = store.create_job("https://vimeo.com/prelock")
+    token = store.acquire_job_lock(job.id)
+
+    with store.job_lock(job.id, token=token):
+        assert store.is_job_locked(job.id) is True
+
+    assert store.is_job_locked(job.id) is False
+
+
+def test_job_loads_legacy_youtube_url_field(tmp_data_dir) -> None:
+    """job.json written before the rename (youtube_url) still loads."""
+    job = store.create_job("https://vimeo.com/legacy")
+    path = store._job_path(job.id)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.pop("source_url", None)
+    raw["youtube_url"] = "https://vimeo.com/legacy"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    loaded = store.load_job(job.id)
+    assert loaded.source_url == "https://vimeo.com/legacy"
+
+
+def test_recover_stale_running_job_marks_failed(tmp_data_dir) -> None:
+    job = store.create_job("https://vimeo.com/stale")
+    job.status = JobStatus.translating
+    job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+
+    recovered = store.recover_stale_running_job(job, stale_after_seconds=30)
+
+    assert recovered is True
+    assert job.status == JobStatus.failed
+    assert "interrupted" in (job.error or "")
+
+
+def test_recover_recent_running_job_keeps_status(tmp_data_dir) -> None:
+    job = store.create_job("https://vimeo.com/recent")
+    job.status = JobStatus.translating
+    job.updated_at = datetime.now(timezone.utc)
+
+    recovered = store.recover_stale_running_job(job, stale_after_seconds=30)
+
+    assert recovered is False
+    assert job.status == JobStatus.translating
 
 
 def test_list_jobs(tmp_data_dir) -> None:
@@ -63,6 +143,24 @@ def test_review_segments_roundtrip(tmp_data_dir) -> None:
     assert loaded[0].source == SegmentSource.caption
 
 
+def test_review_segments_reject_duplicate_ids(tmp_data_dir) -> None:
+    job = store.create_job("https://vimeo.com/review")
+    segments = [
+        Segment(id=1, start=0.0, end=1.0, japanese="一つ目"),
+        Segment(id=1, start=1.0, end=2.0, japanese="二つ目"),
+    ]
+
+    with pytest.raises(ValueError, match="Duplicate segment"):
+        store.write_review_segments(job.id, segments)
+
+
 def test_load_review_segments_missing(tmp_data_dir) -> None:
     job = store.create_job("https://vimeo.com/nosegments")
     assert store.load_review_segments(job.id) is None
+
+
+def test_load_review_segments_missing_valid_id_does_not_create_directory(tmp_data_dir) -> None:
+    job_id = "00000000-0000-0000-0000-000000000001"
+
+    assert store.load_review_segments(job_id) is None
+    assert not (tmp_data_dir / "jobs" / job_id).exists()

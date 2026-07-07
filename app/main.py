@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Callable, List, Literal, Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl
 
 from pipeline.orchestrator import run_job, run_transcription, run_translation
 from state import store
@@ -20,18 +20,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-RUNNING_STATUSES = {
-    JobStatus.downloading,
-    JobStatus.transcribing,
-    JobStatus.segmenting,
-    JobStatus.translating,
-    JobStatus.refining,
-}
+RUNNING_STATUSES = store.RUNNING_JOB_STATUSES
 
 
+# ``youtube_url`` is accepted as a legacy alias for ``source_url`` so existing
+# clients and docs keep working after the field rename.
 class CreateJobRequest(BaseModel):
-    youtube_url: HttpUrl
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_url: HttpUrl = Field(validation_alias=AliasChoices("source_url", "youtube_url"))
     auto_start: Literal["run", "transcribe", "none"] = "run"
+
+
+class TranscribeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_url: HttpUrl = Field(validation_alias=AliasChoices("source_url", "youtube_url"))
 
 
 class TranslateRequest(BaseModel):
@@ -50,7 +54,7 @@ class SegmentReview(BaseModel):
 
 class JobSummary(BaseModel):
     id: str
-    youtube_url: str
+    source_url: str
     status: JobStatus
     created_at: str
     video_title: Optional[str] = None
@@ -64,8 +68,54 @@ def _get_job_or_404(job_id: str) -> Job:
 
 
 def _ensure_not_running(job: Job) -> None:
+    store.recover_stale_running_job(job)
     if job.status in RUNNING_STATUSES:
         raise HTTPException(status_code=409, detail=f"Job is already running ({job.status.value})")
+    if store.is_job_locked(job.id):
+        raise HTTPException(status_code=409, detail="Job is already running")
+
+
+def _claim(job: Job) -> str:
+    """Reserve a job for a background run, returning its lock token.
+
+    Acquiring the lock here (before scheduling the background task) makes the
+    start atomic: concurrent requests for the same job get a clean 409 instead
+    of both proceeding and leaving the job wedged in a running state.
+    """
+    _ensure_not_running(job)
+    try:
+        return store.acquire_job_lock(job.id)
+    except store.JobLockError as exc:
+        raise HTTPException(status_code=409, detail="Job is already running") from exc
+
+
+def _mark_started(job: Job, status: JobStatus) -> None:
+    job.status = status
+    job.error = None
+    store.save_job(job)
+
+
+def _launch(
+    job: Job,
+    status: JobStatus,
+    background_tasks: BackgroundTasks,
+    runner: Callable[..., object],
+    **runner_kwargs: object,
+) -> dict:
+    """Claim the job, mark it started, and schedule the background runner.
+
+    The lock is acquired here (not inside the worker) so concurrent starts get a
+    clean 409. If anything fails before the task is queued we release the claim,
+    otherwise the worker owns the token and releases it when it finishes.
+    """
+    token = _claim(job)
+    try:
+        _mark_started(job, status)
+        background_tasks.add_task(runner, job.id, lock_token=token, **runner_kwargs)
+    except Exception:
+        store.release_job_lock(job.id, token)
+        raise
+    return {"job_id": job.id, "status": status.value}
 
 
 @app.get("/health")
@@ -76,29 +126,22 @@ def health() -> dict:
 @app.post("/jobs")
 def create_job(request: CreateJobRequest, background_tasks: BackgroundTasks) -> dict:
     """Create a job. By default starts the full pipeline; use auto_start to control."""
+    job = store.create_job(str(request.source_url))
     if request.auto_start == "none":
-        job = store.create_job(str(request.youtube_url))
         return {"job_id": job.id, "status": job.status.value}
 
-    if request.auto_start == "transcribe":
-        job = store.create_job(str(request.youtube_url))
-        background_tasks.add_task(run_transcription, job.id)
-        return {"job_id": job.id, "status": JobStatus.downloading.value}
-
-    job = store.create_job(str(request.youtube_url))
-    background_tasks.add_task(run_job, job.id)
-    return {"job_id": job.id, "status": JobStatus.downloading.value}
+    runner = run_transcription if request.auto_start == "transcribe" else run_job
+    return _launch(job, JobStatus.downloading, background_tasks, runner)
 
 
 @app.post("/jobs/transcribe")
 def create_and_start_transcription(
-    request: CreateJobRequest,
+    request: TranscribeRequest,
     background_tasks: BackgroundTasks,
 ) -> dict:
     """Create a job and start transcription only (phase 1)."""
-    job = store.create_job(str(request.youtube_url))
-    background_tasks.add_task(run_transcription, job.id)
-    return {"job_id": job.id, "status": JobStatus.downloading.value}
+    job = store.create_job(str(request.source_url))
+    return _launch(job, JobStatus.downloading, background_tasks, run_transcription)
 
 
 @app.get("/jobs", response_model=List[JobSummary])
@@ -106,7 +149,7 @@ def list_jobs() -> List[JobSummary]:
     return [
         JobSummary(
             id=job.id,
-            youtube_url=job.youtube_url,
+            source_url=job.source_url,
             status=job.status,
             created_at=job.created_at.isoformat(),
             video_title=job.video_title,
@@ -124,9 +167,7 @@ def get_job(job_id: str) -> Job:
 def start_transcription(job_id: str, background_tasks: BackgroundTasks) -> dict:
     """Run phase 1: download + transcribe + segment. Ends at status transcribed."""
     job = _get_job_or_404(job_id)
-    _ensure_not_running(job)
-    background_tasks.add_task(run_transcription, job.id)
-    return {"job_id": job.id, "status": JobStatus.downloading.value}
+    return _launch(job, JobStatus.downloading, background_tasks, run_transcription)
 
 
 @app.post("/jobs/{job_id}/translate")
@@ -137,31 +178,31 @@ def start_translation(
 ) -> dict:
     """Run phase 2: translate reviewed segments + optional critic/repair loop."""
     job = _get_job_or_404(job_id)
-    _ensure_not_running(job)
-    if not job.segments and store.load_review_segments(job_id) is None:
+    try:
+        reviewed = store.load_review_segments(job.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not job.segments and not reviewed:
         raise HTTPException(
             status_code=400,
             detail="No segments to translate. Run POST /jobs/{job_id}/transcribe first.",
         )
     refine = body.refine if body else None
-    background_tasks.add_task(run_translation, job.id, refine=refine)
-    return {"job_id": job.id, "status": JobStatus.translating.value}
+    return _launch(job, JobStatus.translating, background_tasks, run_translation, refine=refine)
 
 
 @app.post("/jobs/{job_id}/run")
 def start_full_pipeline(job_id: str, background_tasks: BackgroundTasks) -> dict:
     """Run full pipeline: transcribe then translate (no review pause)."""
     job = _get_job_or_404(job_id)
-    _ensure_not_running(job)
-    background_tasks.add_task(run_job, job.id)
-    return {"job_id": job.id, "status": JobStatus.downloading.value}
+    return _launch(job, JobStatus.downloading, background_tasks, run_job)
 
 
 @app.get("/jobs/{job_id}/segments")
 def get_review_segments(job_id: str) -> FileResponse:
     """Download segments.json for review before translation."""
-    _get_job_or_404(job_id)
-    path = store.segments_review_path(job_id)
+    job = _get_job_or_404(job_id)
+    path = store.segments_review_path(job.id, create_dir=False)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Segments not ready. Run transcribe first.")
     return FileResponse(path, media_type="application/json", filename="segments.json")
@@ -171,25 +212,23 @@ def get_review_segments(job_id: str) -> FileResponse:
 def update_review_segments(job_id: str, segments: List[SegmentReview]) -> dict:
     """Upload edited segments.json before running translate."""
     job = _get_job_or_404(job_id)
-    parsed = [
-        Segment.model_validate(
-            {
-                **segment.model_dump(),
-                "source": segment.source,
-            }
-        )
-        for segment in segments
-    ]
-    store.write_review_segments(job_id, parsed)
+    _ensure_not_running(job)
+    if not segments:
+        raise HTTPException(status_code=400, detail="At least one segment is required")
+    try:
+        parsed = [Segment.model_validate(segment.model_dump()) for segment in segments]
+        store.write_review_segments(job.id, parsed)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     job.segments = parsed
     store.save_job(job)
-    return {"job_id": job_id, "segments": len(parsed), "status": job.status.value}
+    return {"job_id": job.id, "segments": len(parsed), "status": job.status.value}
 
 
 @app.get("/jobs/{job_id}/output")
 def get_output(job_id: str) -> FileResponse:
-    _get_job_or_404(job_id)
-    path = store.job_dir(job_id) / "output.json"
+    job = _get_job_or_404(job_id)
+    path = store.job_dir(job.id, create=False) / "output.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Output not ready")
     return FileResponse(path, media_type="application/json", filename="output.json")
@@ -197,9 +236,9 @@ def get_output(job_id: str) -> FileResponse:
 
 @app.get("/jobs/{job_id}/output.srt")
 def get_output_srt(job_id: str, lang: str = Query("en", pattern="^(ja|en)$")) -> FileResponse:
-    _get_job_or_404(job_id)
+    job = _get_job_or_404(job_id)
     suffix = "ja" if lang == "ja" else "en"
-    path = store.job_dir(job_id) / f"output.{suffix}.srt"
+    path = store.job_dir(job.id, create=False) / f"output.{suffix}.srt"
     if not path.exists():
         raise HTTPException(status_code=404, detail="SRT not ready")
     return FileResponse(path, media_type="application/x-subrip", filename=path.name)
@@ -207,8 +246,8 @@ def get_output_srt(job_id: str, lang: str = Query("en", pattern="^(ja|en)$")) ->
 
 @app.get("/jobs/{job_id}/refinement_log")
 def get_refinement_log(job_id: str) -> FileResponse:
-    _get_job_or_404(job_id)
-    path = store.job_dir(job_id) / "refinement_log.json"
+    job = _get_job_or_404(job_id)
+    path = store.job_dir(job.id, create=False) / "refinement_log.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Refinement log not found")
     return FileResponse(path, media_type="application/json", filename="refinement_log.json")

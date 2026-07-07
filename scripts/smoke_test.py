@@ -26,8 +26,12 @@ DEFAULT_SYSTEM_PROMPT = (
 def run_translation_test() -> None:
     translator = get_translator()
     english = translator.translate(SAMPLE_JAPANESE, system_prompt=DEFAULT_SYSTEM_PROMPT)
-
-    print(f"Translation ({settings.ollama_model}): {english}")
+    active_model = (
+        settings.ollama_model
+        if settings.translation_backend == "ollama"
+        else settings.translation_model
+    )
+    print(f"Translation ({active_model}): {english}")
 
 
 def run_transcription_test(audio_path: Path) -> None:

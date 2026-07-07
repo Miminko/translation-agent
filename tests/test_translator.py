@@ -73,6 +73,50 @@ def test_translate_segments_populates_cache_on_miss(
     assert cache[key] == ["EN-1", "EN-2"]
 
 
+def test_translate_segments_does_not_cache_partial_window(
+    mock_translator, agent_job, sample_segments
+) -> None:
+    # Model returns only the first of two lines: the incomplete window must not
+    # be cached, so the dropped line is retried on a later run.
+    mock_translator.on_translate(
+        lambda text, _sys: json.dumps(
+            {"translations": [{"id": sample_segments[0].id, "english": "EN-1"}]}
+        )
+        if "Lines to translate:" in text
+        else None
+    )
+    cache: dict = {}
+
+    result = translate_segments(
+        sample_segments, agent_job, cache=cache, cache_model="test-model"
+    )
+
+    assert result[0].english == "EN-1"
+    assert result[1].english is None
+    assert cache == {}
+
+
+def test_translate_segments_ignores_incomplete_cache_entry(
+    mock_translator, agent_job, sample_segments
+) -> None:
+    key = translation_key("test-model", [s.japanese for s in sample_segments])
+    cache = {key: ["Cached 1", None]}  # a previously dropped second line
+    mock_translator.on_translate(
+        lambda text, _sys: _window_translation_response(sample_segments)
+        if "Lines to translate:" in text
+        else None
+    )
+
+    result = translate_segments(
+        sample_segments, agent_job, cache=cache, cache_model="test-model"
+    )
+
+    assert result[0].english == "EN-1"
+    assert result[1].english == "EN-2"
+    assert mock_translator.calls  # incomplete entry forced a re-translation
+    assert cache[key] == ["EN-1", "EN-2"]
+
+
 def test_translate_segments_falls_back_to_per_line(
     mock_translator, agent_job
 ) -> None:
