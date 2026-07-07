@@ -1,23 +1,20 @@
 from __future__ import annotations
 
-import sys
 import time
 import traceback
+from pathlib import Path
 from typing import Optional
 
 from config import settings
 from core import cache, merger, output, qa, segmenter
 from core.providers.transcription import unload_whisper_model
+from log_utils import log as _log
 from state.models import Job, JobStatus
 from state import store
 from agents import translator as translation_agent
 
 
-def _log(message: str) -> None:
-    print(message, file=sys.stderr, flush=True)
-
-
-def _record_failure(job: Job, job_dir, exc: Exception, *, verbose: bool) -> None:
+def _record_failure(job: Job, job_dir: Path, exc: Exception, *, verbose: bool) -> None:
     job.status = JobStatus.failed
     job.error = str(exc)
     (job_dir / "error.log").write_text(traceback.format_exc(), encoding="utf-8")
@@ -43,7 +40,7 @@ def _run_transcription_unlocked(job_id: str, *, verbose: bool = False) -> Job:
             _log(f"[{job_id}] Downloading audio...")
 
         dl, audio_cached = cache.get_or_download_audio(
-            job.youtube_url, job_dir, show_progress=verbose
+            job.source_url, job_dir, show_progress=verbose
         )
         job.audio_path = str(dl.audio_path)
         job.video_title = dl.metadata.title
@@ -58,7 +55,7 @@ def _run_transcription_unlocked(job_id: str, *, verbose: bool = False) -> Job:
         if verbose:
             _log(f"[{job_id}] Transcribing (captions + whisper)...")
 
-        caption_list, captions_cached = cache.get_or_fetch_captions(job.youtube_url, job_dir)
+        caption_list, captions_cached = cache.get_or_fetch_captions(job.source_url, job_dir)
         whisper_result = None
         whisper_cached = False
         run_whisper = settings.whisper_mode == "always"
@@ -67,7 +64,7 @@ def _run_transcription_unlocked(job_id: str, *, verbose: bool = False) -> Job:
             run_whisper = coverage < 0.95
         if run_whisper or not caption_list:
             whisper_result, whisper_cached = cache.get_or_transcribe(
-                dl.audio_path, job.youtube_url, job_dir
+                dl.audio_path, job.source_url, job_dir
             )
             unload_whisper_model()
         if verbose:
@@ -135,12 +132,12 @@ def _run_translation_unlocked(job_id: str, *, verbose: bool = False, refine: Opt
         if verbose:
             _log(f"[{job_id}] Translating {len(job.segments)} segments...")
 
-        translation_cache = cache.load_translation_cache(job.youtube_url)
+        translation_cache = cache.load_translation_cache(job.source_url)
         if verbose and translation_cache:
             _log(f"[{job_id}] Loaded {len(translation_cache)} cached translation windows")
 
         def _save_cache(data: dict) -> None:
-            cache.save_translation_cache(job.youtube_url, data)
+            cache.save_translation_cache(job.source_url, data)
 
         last_save = [0.0]
 
@@ -223,19 +220,31 @@ def _run_translation_unlocked(job_id: str, *, verbose: bool = False, refine: Opt
     return job
 
 
-def run_transcription(job_id: str, *, verbose: bool = False) -> Job:
-    with store.job_lock(job_id):
+def run_transcription(job_id: str, *, verbose: bool = False, lock_token: Optional[str] = None) -> Job:
+    with store.job_lock(job_id, token=lock_token):
         return _run_transcription_unlocked(job_id, verbose=verbose)
 
 
-def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:
-    with store.job_lock(job_id):
+def run_translation(
+    job_id: str,
+    *,
+    verbose: bool = False,
+    refine: Optional[bool] = None,
+    lock_token: Optional[str] = None,
+) -> Job:
+    with store.job_lock(job_id, token=lock_token):
         return _run_translation_unlocked(job_id, verbose=verbose, refine=refine)
 
 
-def run_job(job_id: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:
+def run_job(
+    job_id: str,
+    *,
+    verbose: bool = False,
+    refine: Optional[bool] = None,
+    lock_token: Optional[str] = None,
+) -> Job:
     """Full pipeline: transcription then translation, without a review pause."""
-    with store.job_lock(job_id):
+    with store.job_lock(job_id, token=lock_token):
         job = _run_transcription_unlocked(job_id, verbose=verbose)
         if job.status == JobStatus.failed:
             return job

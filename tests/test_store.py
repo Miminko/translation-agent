@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -11,11 +12,11 @@ from state.models import JobStatus, Segment, SegmentSource
 def test_create_and_load_job(tmp_data_dir) -> None:
     job = store.create_job("https://vimeo.com/42")
     assert job.status == JobStatus.pending
-    assert job.youtube_url == "https://vimeo.com/42"
+    assert job.source_url == "https://vimeo.com/42"
 
     loaded = store.load_job(job.id)
     assert loaded.id == job.id
-    assert loaded.youtube_url == job.youtube_url
+    assert loaded.source_url == job.source_url
 
 
 def test_load_job_missing_raises(tmp_data_dir) -> None:
@@ -50,6 +51,41 @@ def test_job_lock_blocks_concurrent_runner(tmp_data_dir) -> None:
                 pass
 
     assert store.is_job_locked(job.id) is False
+
+
+def test_acquire_lock_is_exclusive_and_releases(tmp_data_dir) -> None:
+    job = store.create_job("https://vimeo.com/claim")
+
+    token = store.acquire_job_lock(job.id)
+    assert store.is_job_locked(job.id) is True
+    with pytest.raises(store.JobLockError):
+        store.acquire_job_lock(job.id)
+
+    store.release_job_lock(job.id, token)
+    assert store.is_job_locked(job.id) is False
+
+
+def test_job_lock_accepts_prelocked_token(tmp_data_dir) -> None:
+    job = store.create_job("https://vimeo.com/prelock")
+    token = store.acquire_job_lock(job.id)
+
+    with store.job_lock(job.id, token=token):
+        assert store.is_job_locked(job.id) is True
+
+    assert store.is_job_locked(job.id) is False
+
+
+def test_job_loads_legacy_youtube_url_field(tmp_data_dir) -> None:
+    """job.json written before the rename (youtube_url) still loads."""
+    job = store.create_job("https://vimeo.com/legacy")
+    path = store._job_path(job.id)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.pop("source_url", None)
+    raw["youtube_url"] = "https://vimeo.com/legacy"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    loaded = store.load_job(job.id)
+    assert loaded.source_url == "https://vimeo.com/legacy"
 
 
 def test_recover_stale_running_job_marks_failed(tmp_data_dir) -> None:

@@ -28,7 +28,7 @@ def test_create_job_without_auto_start(client: TestClient, tmp_data_dir) -> None
     body = response.json()
     assert body["status"] == JobStatus.pending.value
     job = store.load_job(body["job_id"])
-    assert job.youtube_url == "https://vimeo.com/501"
+    assert job.source_url == "https://vimeo.com/501"
 
 
 def test_get_job_not_found(client: TestClient, tmp_data_dir) -> None:

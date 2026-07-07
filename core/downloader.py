@@ -53,8 +53,30 @@ def download(video_url: str, output_dir: Path, *, show_progress: bool = False) -
         show_progress=show_progress,
     )
 
-    audio_candidates = sorted(output_dir.glob("audio.*"))
-    if not audio_candidates:
+    audio_path = _select_audio_file(output_dir)
+    if audio_path is None:
         raise RuntimeError("yt-dlp did not produce an audio file")
 
-    return DownloadResult(audio_path=audio_candidates[0], metadata=metadata)
+    return DownloadResult(audio_path=audio_path, metadata=metadata)
+
+
+def _select_audio_file(output_dir: Path) -> Path | None:
+    """Pick the extracted WAV, ignoring in-progress fragments and source leftovers.
+
+    ``--audio-format wav`` yields ``audio.wav``; yt-dlp/ffmpeg can also leave the
+    original container (e.g. ``audio.webm``) or partial ``.part``/``.ytdl`` files
+    in the same directory, so select the WAV explicitly rather than by glob order.
+    """
+    candidates = [
+        path
+        for path in output_dir.glob("audio.*")
+        if path.is_file()
+        and path.suffix not in {".part", ".ytdl"}
+        and not path.name.endswith(".part")
+    ]
+    if not candidates:
+        return None
+    wav_files = [path for path in candidates if path.suffix == ".wav"]
+    if wav_files:
+        return sorted(wav_files)[0]
+    return sorted(candidates)[0]

@@ -86,6 +86,21 @@ def _translate_window(
     return mapping
 
 
+def _cache_entry_complete(english_list: object, window: List[Segment]) -> bool:
+    """A cache entry is only reusable if every line in the window was translated.
+
+    Windows where the model dropped a line (stored as ``None``/blank) are treated
+    as a miss so the window is re-translated instead of leaving those segments
+    permanently untranslated across reruns.
+    """
+    if not isinstance(english_list, list) or len(english_list) < len(window):
+        return False
+    return all(
+        english_list[i] is not None and str(english_list[i]).strip()
+        for i in range(len(window))
+    )
+
+
 def translate_segments(
     segments: List[Segment],
     job: Job,
@@ -117,19 +132,19 @@ def translate_segments(
         texts = [segment.japanese for segment in window]
         key = translation_key(cache_model, texts) if cache is not None else None
 
-        if key is not None and key in cache:
-            english_list = cache[key]
-            mapping = {
-                window[i].id: english_list[i]
-                for i in range(min(len(window), len(english_list)))
-                if english_list[i] is not None
-            }
+        cached_entry = cache.get(key) if (cache is not None and key is not None) else None
+        if _cache_entry_complete(cached_entry, window):
+            mapping = {window[i].id: cached_entry[i] for i in range(len(window))}
             cache_hits += 1
         else:
             mapping = _translate_window(window, job, previous_context)
             if key is not None:
-                cache[key] = [mapping.get(segment.id) for segment in window]
-                dirty = True
+                entry = [mapping.get(segment.id) for segment in window]
+                # Only cache fully-translated windows; partial results would
+                # otherwise be served forever and never retried.
+                if _cache_entry_complete(entry, window):
+                    cache[key] = entry
+                    dirty = True
 
         for segment_id, english in mapping.items():
             if segment_id in segment_by_id:

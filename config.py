@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
 from urllib.error import URLError
@@ -62,12 +63,23 @@ class Settings(BaseSettings):
         return self.local_whisper_model
 
 
-settings = Settings()
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Return the process-wide settings, loaded from the environment once.
+
+    Prefer this accessor over importing the module-level ``settings`` singleton
+    directly: it defers ``.env`` parsing/validation until first use and makes it
+    possible to reset configuration in tests via ``get_settings.cache_clear()``.
+    """
+    return Settings()
+
+
+settings = get_settings()
 
 
 def check_runtime_dependencies(cfg: Optional[Settings] = None) -> None:
     """Verify external services required by the active backends are reachable."""
-    cfg = cfg or settings
+    cfg = cfg or get_settings()
 
     if cfg.translation_backend == "ollama":
         tags_url = f"{cfg.ollama_base_url.rstrip('/')}/api/tags"

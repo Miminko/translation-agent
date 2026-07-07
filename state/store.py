@@ -41,9 +41,10 @@ def _validate_job_id(job_id: str) -> str:
     return str(parsed)
 
 
-def job_dir(job_id: str) -> Path:
-    path = _jobs_root() / _validate_job_id(job_id)
-    path.mkdir(parents=True, exist_ok=True)
+def job_dir(job_id: str, *, create: bool = True) -> Path:
+    path = _jobs_root(create=create) / _validate_job_id(job_id)
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
     return path
 
 
@@ -92,9 +93,13 @@ def _lock_is_active(path: Path) -> bool:
     return False
 
 
-@contextmanager
-def job_lock(job_id: str) -> Iterator[None]:
-    """Hold an exclusive per-job lock for the duration of a pipeline run."""
+def acquire_job_lock(job_id: str) -> str:
+    """Atomically claim a job. Returns a release token or raises JobLockError.
+
+    Claiming synchronously (rather than only inside the pipeline worker) lets
+    callers such as the API reserve a job before scheduling background work,
+    closing the check-then-start race between concurrent requests.
+    """
     path = _lock_path(job_id, create_dir=True)
     token = str(uuid.uuid4())
     payload = {
@@ -107,20 +112,36 @@ def job_lock(job_id: str) -> Iterator[None]:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle)
-            break
+            return token
         except FileExistsError as exc:
             if not _lock_is_active(path):
                 continue
             raise JobLockError(f"Job is already running: {job_id}") from exc
+
+
+def release_job_lock(job_id: str, token: str) -> None:
+    """Release a lock previously acquired with the given token (no-op if reassigned)."""
+    path = _lock_path(job_id, create_dir=False)
+    if _read_lock(path).get("token") == token:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+@contextmanager
+def job_lock(job_id: str, *, token: Optional[str] = None) -> Iterator[None]:
+    """Hold an exclusive per-job lock for the duration of a pipeline run.
+
+    If ``token`` is provided the lock is assumed already held (claimed by the
+    caller via :func:`acquire_job_lock`) and is released on exit; otherwise the
+    lock is acquired here.
+    """
+    owned_token = token or acquire_job_lock(job_id)
     try:
         yield
     finally:
-        current = _read_lock(path)
-        if current.get("token") == token:
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
+        release_job_lock(job_id, owned_token)
 
 
 def is_job_locked(job_id: str) -> bool:
@@ -154,7 +175,7 @@ def create_job(youtube_url: str) -> Job:
     now = datetime.now(timezone.utc)
     job = Job(
         id=str(uuid.uuid4()),
-        youtube_url=normalize_video_url(youtube_url),
+        source_url=normalize_video_url(youtube_url),
         status=JobStatus.pending,
         created_at=now,
         updated_at=now,

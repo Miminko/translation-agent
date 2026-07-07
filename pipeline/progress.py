@@ -86,8 +86,23 @@ def format_job_progress(job: Job, *, elapsed: Optional[float] = None) -> str:
         percent = start_pct + int((translated / total) * (89 - start_pct)) if total else start_pct
         extras.append(f"{translated}/{total} translated")
     elif job.status == JobStatus.refining and job.segments:
-        total = len(job.segments)
-        reviewed = sum(1 for segment in job.segments if segment.translation_confidence is not None)
+        # In flagged_only mode only the heuristic candidates get critiqued, so
+        # measuring progress against every segment would barely move the bar.
+        from core import qa
+
+        if settings.refinement_critique_mode == "all":
+            scope_ids = {segment.id for segment in job.segments}
+        else:
+            scope_ids = qa.refinement_candidates(job.segments)
+        total = len(scope_ids) or len(job.segments)
+        reviewed = min(
+            total,
+            sum(
+                1
+                for segment in job.segments
+                if segment.id in scope_ids and segment.translation_confidence is not None
+            ),
+        )
         start_pct, _ = STATUS_PROGRESS[JobStatus.refining]
         percent = start_pct + int((reviewed / total) * (99 - start_pct)) if total else start_pct
         extras.append(f"{reviewed}/{total} critiqued")

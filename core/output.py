@@ -77,7 +77,7 @@ def write_output(job: Job, output_dir: Path) -> OutputPaths:
 
     payload = {
         "job_id": job.id,
-        "youtube_url": job.youtube_url,
+        "source_url": job.source_url,
         "video_title": job.video_title,
         "status": job.status.value,
         "segments": [segment.model_dump() for segment in job.segments],

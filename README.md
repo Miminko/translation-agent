@@ -136,7 +136,7 @@ Example two-phase flow:
 # 1. Start transcription
 curl -X POST http://localhost:8000/jobs/transcribe \
   -H "Content-Type: application/json" \
-  -d '{"youtube_url": "https://vimeo.com/VIDEO_ID"}'
+  -d '{"source_url": "https://vimeo.com/VIDEO_ID"}'   # "youtube_url" still accepted
 
 # 2. Poll until status = transcribed
 curl http://localhost:8000/jobs/{job_id}

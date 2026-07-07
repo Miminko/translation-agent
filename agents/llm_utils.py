@@ -25,7 +25,10 @@ def extract_json(text: str) -> Optional[dict]:
     except json.JSONDecodeError:
         pass
     for candidate in _json_candidates(text):
-        payload = json.loads(candidate)
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
         if isinstance(payload, dict):
             return payload
     return None

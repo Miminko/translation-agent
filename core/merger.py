@@ -95,16 +95,31 @@ def reconcile(
     if not whisper_utts:
         return caption_utts
 
+    # Sorted two-pointer sweep instead of the previous O(captions × whisper)
+    # nested scan — long videos have thousands of cues in each list.
+    whisper_sorted = sorted(whisper_utts, key=lambda u: u.start)
+    covered = [False] * len(whisper_sorted)
     merged: List[TimedUtterance] = []
 
-    for caption in caption_utts:
+    lo = 0
+    for caption in sorted(caption_utts, key=lambda u: u.start):
+        # Whisper utterances ending before this caption starts can't overlap it
+        # or any later (sorted) caption, so retire them permanently.
+        while lo < len(whisper_sorted) and whisper_sorted[lo].end <= caption.start:
+            lo += 1
+
         best_match: Optional[TimedUtterance] = None
         best_overlap = 0.0
-        for whisper_utt in whisper_utts:
+        index = lo
+        while index < len(whisper_sorted) and whisper_sorted[index].start < caption.end:
+            whisper_utt = whisper_sorted[index]
             overlap = _overlap(caption.start, caption.end, whisper_utt.start, whisper_utt.end)
+            if overlap >= 0.3:
+                covered[index] = True
             if overlap > best_overlap:
                 best_overlap = overlap
                 best_match = whisper_utt
+            index += 1
 
         utterance = TimedUtterance(
             start=caption.start,
@@ -121,13 +136,8 @@ def reconcile(
                 utterance.source = "merged"
         merged.append(utterance)
 
-    for whisper_utt in whisper_utts:
-        covered = False
-        for caption in caption_utts:
-            if _overlap(caption.start, caption.end, whisper_utt.start, whisper_utt.end) >= 0.3:
-                covered = True
-                break
-        if not covered:
+    for index, whisper_utt in enumerate(whisper_sorted):
+        if not covered[index]:
             merged.append(whisper_utt)
 
     merged.sort(key=lambda item: item.start)

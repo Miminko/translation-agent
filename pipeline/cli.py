@@ -115,7 +115,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     job = store.load_job(args.job_id)
     print(f"Job: {job.id}")
     print(format_job_progress(job))
-    print(f"URL: {job.youtube_url}")
+    print(f"URL: {job.source_url}")
     if job.video_title:
         print(f"Title: {job.video_title}")
     _print_error_details(job)
@@ -139,7 +139,7 @@ def cmd_list(_: argparse.Namespace) -> int:
         print("No jobs found.")
         return 0
     for job in jobs:
-        print(f"{job.id}  {job.status.value:12}  {job.youtube_url}")
+        print(f"{job.id}  {job.status.value:12}  {job.source_url}")
     return 0
 
 
