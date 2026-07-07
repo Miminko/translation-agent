@@ -24,6 +24,25 @@ def _fmt_ts(seconds: float) -> str:
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
+def _audio_duration(audio_path: Path) -> float:
+    """Best-effort audio duration in seconds via ffprobe; 0.0 if unavailable."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return float(out.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0
+
+
 def _get_whisper_model(model_name: str):
     global _whisper_model, _whisper_model_name
     if _whisper_model is None or _whisper_model_name != model_name:
@@ -99,11 +118,18 @@ def transcribe_mlx(audio_path: Path, model_repo: str) -> dict:
             "(or set TRANSCRIPTION_BACKEND=local to use faster-whisper on CPU)"
         ) from exc
 
+    total = _audio_duration(audio_path)
+    if total:
+        _log(f"  transcribing {_fmt_ts(total)} of audio on GPU (mlx)...")
+
+    # verbose=True streams every decoded segment ([start --> end] text) so the
+    # run shows continuous progress and a live preview instead of looking hung.
     result = mlx_whisper.transcribe(
         str(audio_path),
         path_or_hf_repo=model_repo,
         language="ja",
         word_timestamps=False,
+        verbose=True,
     )
 
     segments = []

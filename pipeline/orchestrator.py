@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import traceback
 
 from config import settings
 from core import cache, merger, output, qa, segmenter
@@ -88,8 +89,11 @@ def run_job(job_id: str, *, verbose: bool = False) -> Job:
     except Exception as exc:
         job.status = JobStatus.failed
         job.error = str(exc)
+        tb = traceback.format_exc()
+        (job_dir / "error.log").write_text(tb, encoding="utf-8")
         if verbose:
             _log(f"[{job_id}] Failed: {exc}")
+            _log(f"[{job_id}] Traceback written to {job_dir / 'error.log'}")
     finally:
         store.save_job(job)
 

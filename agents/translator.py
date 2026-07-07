@@ -62,6 +62,29 @@ def _apply_translations(segments: List[Segment], mapping: Dict[int, str]) -> Lis
     return updated
 
 
+def _parse_translation_items(
+    items: list,
+    window: List[Segment],
+) -> Dict[int, str]:
+    """Map segment ids to English; tolerate models that omit or rename keys."""
+    mapping: Dict[int, str] = {}
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        english = item.get("english") or item.get("translation") or item.get("text")
+        if english is None:
+            continue
+        raw_id = item.get("id") or item.get("segment_id") or item.get("line")
+        if raw_id is not None:
+            segment_id = int(raw_id)
+        elif index < len(window):
+            segment_id = window[index].id
+        else:
+            continue
+        mapping[segment_id] = str(english).strip()
+    return mapping
+
+
 def _translate_window(
     window: List[Segment],
     job: Job,
@@ -77,9 +100,7 @@ def _translate_window(
     )
     payload = _extract_json(response)
     if payload and "translations" in payload:
-        mapping: Dict[int, str] = {}
-        for item in payload["translations"]:
-            mapping[int(item["id"])] = str(item["english"]).strip()
+        mapping = _parse_translation_items(payload["translations"], window)
         if mapping:
             return mapping
 
@@ -87,7 +108,9 @@ def _translate_window(
     response = translator.translate(retry_prompt, system_prompt=system_prompt)
     payload = _extract_json(response)
     if payload and "translations" in payload:
-        return {int(item["id"]): str(item["english"]).strip() for item in payload["translations"]}
+        mapping = _parse_translation_items(payload["translations"], window)
+        if mapping:
+            return mapping
 
     mapping = {}
     for segment in window:
