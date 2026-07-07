@@ -91,10 +91,11 @@ SETUP INSTRUCTIONS:
 
 RUNNING JOBS:
 ```bash
-# CLI — process a video URL end-to-end (progress bar on by default)
+# One-shot: process a video URL end-to-end (progress bar on by default)
 python -m pipeline.cli run "https://www.youtube.com/watch?v=VIDEO_ID"
-python -m pipeline.cli run -v "URL"          # yt-dlp logs instead of progress bar
+python -m pipeline.cli run -v "URL"          # stage logs instead of progress bar
 python -m pipeline.cli run --no-progress "URL"
+
 python -m pipeline.cli watch <job_id>        # follow a job started elsewhere
 python -m pipeline.cli list
 python -m pipeline.cli status <job_id>
@@ -104,17 +105,37 @@ uvicorn app.main:app --reload
 # POST /jobs  {"youtube_url": "..."}
 # GET  /jobs/{job_id}
 
-# Streamlit review UI
+# Streamlit review UI (two-phase buttons + in-browser transcript editor)
 streamlit run app/streamlit_app.py
 ```
 
+TWO-PHASE WORKFLOW (review transcription before translating):
+```bash
+# Phase 1 — download + transcribe + segment, then STOP for review
+python -m pipeline.cli transcribe "URL"
+# -> writes data/jobs/<job_id>/segments.json and leaves status = "transcribed"
+
+# Review/edit the transcript: open segments.json and
+#   - delete entries to drop duplicates / junk
+#   - fix any `japanese` text errors
+# (edits are honored on translate; only changed windows are re-translated)
+
+# Phase 2 — translate the reviewed segments and write outputs
+python -m pipeline.cli translate <job_id>
+```
+Translation is resumable and cached per window in `data/cache/<url>/translations.json`,
+so an interrupted `translate` run picks up where it left off, and unchanged
+transcript regions are reused after edits.
+
 Outputs are written to `data/jobs/<job_id>/`:
 
+- `segments.json` — editable transcript for review (input to the translate phase)
 - `output.txt` — aligned JA/EN blocks
 - `output.json` — machine-readable segments + flags
 - `output.ja.srt` / `output.en.srt` — subtitles
+- `error.log` — full traceback if a phase fails
 
-**Artifact cache:** Re-running the same video URL reuses cached audio, captions, and Whisper output from `data/cache/` (skip download + transcribe). Disable with `USE_ARTIFACT_CACHE=false` in `.env`.
+**Artifact cache:** Re-running the same video URL reuses cached audio, captions, Whisper output, and per-window translations from `data/cache/` (skips download + transcribe, and resumes/reuses translation). Disable with `USE_ARTIFACT_CACHE=false` in `.env`.
 
 **Transcription backend (`TRANSCRIPTION_BACKEND`):**
 

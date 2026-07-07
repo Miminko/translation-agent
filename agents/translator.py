@@ -2,11 +2,28 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Dict, List, Optional
+import sys
+import time
+from typing import Callable, Dict, List, Optional
 
 from core.providers.translation import get_translator
 from core.segmenter import paragraph_windows
 from state.models import Job, Segment
+
+
+def _log(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+def _fmt_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
 
 
 def _build_system_prompt(job: Job) -> str:
@@ -122,24 +139,81 @@ def _translate_window(
     return mapping
 
 
-def translate_segments(segments: List[Segment], job: Job) -> List[Segment]:
+def translate_segments(
+    segments: List[Segment],
+    job: Job,
+    *,
+    verbose: bool = False,
+    on_progress: Optional[Callable[[List[Segment], int, int], None]] = None,
+    cache: Optional[dict] = None,
+    cache_save: Optional[Callable[[dict], None]] = None,
+    cache_model: str = "",
+) -> List[Segment]:
     if not segments:
         return segments
+
+    from core.cache import translation_key
 
     updated = list(segments)
     segment_by_id = {segment.id: index for index, segment in enumerate(updated)}
     previous_context: Optional[str] = None
 
-    for window in paragraph_windows(segments):
-        mapping = _translate_window(window, job, previous_context)
+    windows = paragraph_windows(segments)
+    total_windows = len(windows)
+    total_segments = len(segments)
+    done_segments = 0
+    cache_hits = 0
+    dirty = False
+    start = time.time()
+
+    for window_index, window in enumerate(windows, start=1):
+        texts = [segment.japanese for segment in window]
+        key = translation_key(cache_model, texts) if cache is not None else None
+
+        if key is not None and key in cache:
+            english_list = cache[key]
+            mapping = {
+                window[i].id: english_list[i]
+                for i in range(min(len(window), len(english_list)))
+                if english_list[i] is not None
+            }
+            cache_hits += 1
+        else:
+            mapping = _translate_window(window, job, previous_context)
+            if key is not None:
+                cache[key] = [mapping.get(segment.id) for segment in window]
+                dirty = True
+
         for segment_id, english in mapping.items():
             if segment_id in segment_by_id:
                 index = segment_by_id[segment_id]
                 updated[index] = updated[index].model_copy(update={"english": english})
 
+        done_segments += len(window)
         previous_context = "\n".join(
             f"JA: {segment.japanese}\nEN: {segment.english or ''}"
             for segment in window[-2:]
         )
+
+        if on_progress:
+            on_progress(updated, done_segments, total_segments)
+
+        # Persist the cache periodically so an interrupted run resumes cheaply.
+        if dirty and cache_save and window_index % 10 == 0:
+            cache_save(cache)
+            dirty = False
+
+        if verbose:
+            elapsed = time.time() - start
+            rate = window_index / elapsed if elapsed > 0 else 0
+            remaining = (total_windows - window_index) / rate if rate > 0 else 0
+            _log(
+                f"\033[2K\r  translating window {window_index}/{total_windows} "
+                f"({done_segments}/{total_segments} segments, {cache_hits} cached) "
+                f"· {_fmt_duration(elapsed)} elapsed · ~{_fmt_duration(remaining)} left"
+            )
+
+    if dirty and cache_save:
+        cache_save(cache)
 
     return updated
