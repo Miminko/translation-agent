@@ -29,6 +29,7 @@ class JobStatus(str, Enum):
     downloading = "downloading"
     transcribing = "transcribing"
     segmenting = "segmenting"
+    transcribed = "transcribed"  # paused after transcription for manual review
     translating = "translating"
     completed = "completed"
     failed = "failed"

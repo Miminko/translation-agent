@@ -161,3 +161,42 @@ def get_or_transcribe(
     manifest["whisper_model"] = settings.active_whisper_model
     _write_manifest(video_url, manifest)
     return result, False
+
+
+# --- Translation cache -----------------------------------------------------
+# Keyed per window by a hash of (translation model + the Japanese lines in that
+# window). Interrupted runs resume, and after editing the transcript only the
+# windows whose text actually changed are re-translated.
+
+def _translation_cache_path(video_url: str) -> Path:
+    return url_cache_dir(video_url) / "translations.json"
+
+
+def translation_key(model: str, japanese_texts: List[str]) -> str:
+    payload = model + "\n\u0000".join(japanese_texts)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def load_translation_cache(video_url: str) -> dict:
+    if not settings.use_artifact_cache:
+        return {}
+    path = _translation_cache_path(video_url)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def save_translation_cache(video_url: str, cache_data: dict) -> None:
+    if not settings.use_artifact_cache:
+        return
+    directory = url_cache_dir(video_url)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = _translation_cache_path(video_url)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(cache_data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    tmp.replace(path)

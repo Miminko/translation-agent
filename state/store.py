@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from config import settings
-from state.models import Job, JobStatus
+from state.models import Job, JobStatus, Segment
 
 
 def _jobs_root() -> Path:
@@ -74,3 +74,43 @@ def find_job(job_id: str) -> Optional[Job]:
         return load_job(job_id)
     except FileNotFoundError:
         return None
+
+
+def segments_review_path(job_id: str) -> Path:
+    return job_dir(job_id) / "segments.json"
+
+
+def write_review_segments(job_id: str, segments: List[Segment]) -> Path:
+    """Write a clean, human-editable transcript for review before translation.
+
+    Only the fields worth reviewing are included. Delete entries to drop
+    duplicates, or edit `japanese` to fix transcription errors, then run the
+    translate phase — it reads this file back.
+    """
+    path = segments_review_path(job_id)
+    payload = [
+        {
+            "id": segment.id,
+            "start": round(segment.start, 3),
+            "end": round(segment.end, 3),
+            "japanese": segment.japanese,
+            "source": segment.source.value,
+            "confidence": segment.confidence,
+            "flags": segment.flags,
+        }
+        for segment in segments
+    ]
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def load_review_segments(job_id: str) -> Optional[List[Segment]]:
+    """Load reviewed/edited segments from segments.json if it exists."""
+    path = segments_review_path(job_id)
+    if not path.exists():
+        return None
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    segments: List[Segment] = []
+    for entry in raw:
+        segments.append(Segment.model_validate(entry))
+    return segments

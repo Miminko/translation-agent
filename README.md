@@ -1,160 +1,186 @@
-Semi-autonomous translation pipeline agent that helps me complete Japanese-English transcription and translation jobs.
+# Translation Agent
 
-Current Workflow:
-- Manually watch videos and manually transcribe Japanese speech
-- Manually translate transcription to English
+Japanese → English transcription and translation pipeline for long-form video (YouTube, Vimeo). Local-first: **mlx-whisper** on Apple Silicon for transcription, **Ollama (Qwen2.5)** for translation.
 
-New Workflow:
-- Videos -> audio -> Japanese Transcription -> segmentation -> English Translation -> QA Checks -> Review Output
-- Multiple specialized roles
-- Iterative refinement loops
-- Explicit evaluation steps (quality + consistency checks)
-- Human-in-the-loop approval
-- Paste in Youtube URL, click run, get Japanese transcript (time-aligned), English translation (aligned per segment), optional term consistency notes, confidence flags per segments
-- Manually review flagged portions
+Paste a video URL, get time-aligned Japanese transcription, review/edit it, then translate to English with QA flags and subtitle exports.
 
-Challenges:
-- A lot of human speech (especially Japanese) is contextual, requires visual understanding as opposed to pure audio
+## What it does today
 
-High Level:
-- Youtube Downloader
-- Audio Extractor
-- Speech to Japanese
-- Segmentation Agent (chunk + align timestamps)
-- Translation Agent (JA -> EN)
-- QA Agent (consistency checks, missing meaning detection, hallucination risk scoring)
-- Review Interface (me)
-- Multi-step reasoning loop, not just one-shot LLM calls
-- State Tracking: store segments, revisions, critic feedback history
-- Conditional execution: e.g. if confidence < 0.7: rerun_translation()
-- Tool Use: agent should decide whether to re-transcribe noisy segments, expand context window, fetch prior/subsequent sentences
-- Evaluation Metrics: track translation edit distance after critique, confidence distributions, correction rate
-- Human-in-the-loop UI: highlight uncertain segments, suggested fixes, approve/reject workflow
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Download audio | ✅ | yt-dlp, `bestaudio`, WAV output |
+| Japanese captions + Whisper | ✅ | Hybrid merge; mlx GPU on Apple Silicon |
+| Segmentation | ✅ | Sentence boundaries + paragraph windows |
+| **Manual review pause** | ✅ | Edit `segments.json` before translating |
+| Translation | ✅ | Ollama, paragraph-window batches, resumable cache |
+| QA flags | ✅ | `low_confidence`, `length_anomaly`, etc. |
+| Outputs | ✅ | `output.txt`, `output.json`, `.srt` files |
+| CLI (run / transcribe / translate) | ✅ | Progress bar + verbose mode |
+| Streamlit UI | ✅ | Two-phase buttons + in-browser editor |
+| FastAPI | ✅ | Basic job API |
+| Critic / Repair agents | ⏳ | Stubs only — see [PLAN.md](PLAN.md) |
 
-- Extra upgrades: Add glossary memory by building a simple store in JSON for technical terms or jargon, that get injected into translation prompts ==> persistent agent system.
-- Add speaker-aware translation, basic diarization
-- Add translation style modes: e.g. literal mode (for legal documents), natural mode (subtitles), summary mode (for meetings)
+## Pipeline
 
-Tech Stack:
-- Python
-- Qwen (Ollama) + faster-whisper (local, free)
-- yt-dlp (youtube download)
-- ffmpeg (audio extraction)
-- LangGraph (agent framework, phase 2)
-- Streamlit + FastAPI
+```
+Video URL
+  → download audio (cached)
+  → fetch JA captions + Whisper transcribe (cached)
+  → merge + segment
+  → [PAUSE] status = transcribed — review segments.json
+  → translate windows via Ollama (cached per window)
+  → QA flags
+  → output.txt / output.json / output.ja.srt / output.en.srt
+```
 
-MVP: Deterministic Pipeline
-1. Download video + extract audio
+Job statuses: `pending` → `downloading` → `transcribing` → `segmenting` → **`transcribed`** (review) → `translating` → `completed` | `failed`
+
+## Setup
+
+**Prerequisites:** macOS with Apple Silicon (for mlx backend), or any OS with CPU (use `local` backend).
+
 ```bash
-yt-dlp -x --audio-format mp3 <youtube_url>
+brew install ffmpeg yt-dlp ollama
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env          # adjust models if needed
+ollama serve                  # separate terminal
+ollama pull qwen2.5:14b       # or qwen2.5:7b on 8GB RAM
+python scripts/smoke_test.py  # verify config + Ollama
 ```
 
-2. Transcribe Japanese
+## Running jobs
 
-3. Segment normalization
-Group meaningful chunks (sentence boundaries).
+### One-shot (both phases, no review pause)
 
-4. Translation (baseline)
-
-5. Output aligned file
-Generate as Google Doc format:
-start_time:
-end_time:
-japanese:
-english:
-
-6. Convert to Agentic System
-- 3 agents: Translation Agent, Critic Agent, Repair Agent
-- Translation Agent: detects ambiguity, chooses literal vs adaptive translation, preserve discourse flow
-- Critic Agent: checks whether English preserves meaning, if anything imitted, tone match, hallucinations
-```
-You are a tranlation critic.
-Compare Japanese and English.
-Return:
-- issues (if any)
-- confidence 0-1
-- corrected translation if needed
-```
-- Repair Agent: if critic flags issues -> regenerate translation with feedback.
-- Creates loop: translate -> critique -> re-check
-
-
-SETUP INSTRUCTIONS:
-1. `brew install ffmpeg yt-dlp ollama`
-2. `python3 -m venv .venv && source .venv/bin/activate`
-3. `pip install -r requirements.txt`
-4. `cp .env.example .env` and adjust model names if needed
-5. `ollama serve` (separate terminal)
-6. `ollama pull qwen2.5:14b` (or `qwen2.5:7b` on 8GB RAM)
-7. `python scripts/smoke_test.py` — verifies config + Ollama translation
-8. `python scripts/smoke_test.py --audio path/to/audio.wav` — also tests Whisper
-
-RUNNING JOBS:
 ```bash
-# CLI — process a video URL end-to-end (progress bar on by default)
-python -m pipeline.cli run "https://www.youtube.com/watch?v=VIDEO_ID"
-python -m pipeline.cli run -v "URL"          # yt-dlp logs instead of progress bar
+python -m pipeline.cli run "https://vimeo.com/VIDEO_ID"
+python -m pipeline.cli run -v "URL"          # stage logs instead of progress bar
 python -m pipeline.cli run --no-progress "URL"
-python -m pipeline.cli watch <job_id>        # follow a job started elsewhere
+```
+
+### Two-phase (recommended for long videos)
+
+```bash
+# Phase 1 — download + transcribe + segment, then STOP
+python -m pipeline.cli transcribe "URL"
+# → writes data/jobs/<job_id>/segments.json, status = transcribed
+
+# Review: edit segments.json — delete duplicates, fix japanese text
+
+# Phase 2 — translate reviewed segments + write outputs
+python -m pipeline.cli translate <job_id>
+```
+
+Re-run an existing job:
+
+```bash
+python -m pipeline.cli transcribe --job-id <job_id> -v
+python -m pipeline.cli translate <job_id> -v
+```
+
+### Other CLI commands
+
+```bash
 python -m pipeline.cli list
 python -m pipeline.cli status <job_id>
+python -m pipeline.cli watch <job_id>        # follow a job started elsewhere
+```
 
-# API
-uvicorn app.main:app --reload
-# POST /jobs  {"youtube_url": "..."}
-# GET  /jobs/{job_id}
+### Streamlit UI
 
-# Streamlit review UI
+```bash
 streamlit run app/streamlit_app.py
 ```
 
-Outputs are written to `data/jobs/<job_id>/`:
+- **Transcribe** — phase 1 only, then pause for review
+- **Run all** — both phases end-to-end
+- In-browser segment editor: edit Japanese, delete rows, save, then **Translate**
 
-- `output.txt` — aligned JA/EN blocks
-- `output.json` — machine-readable segments + flags
-- `output.ja.srt` / `output.en.srt` — subtitles
+### API
 
-**Artifact cache:** Re-running the same video URL reuses cached audio, captions, and Whisper output from `data/cache/` (skip download + transcribe). Disable with `USE_ARTIFACT_CACHE=false` in `.env`.
-
-**Transcription backend (`TRANSCRIPTION_BACKEND`):**
-
-- `mlx` (default, **Apple Silicon only**) — runs Whisper on the M-series GPU via `mlx-whisper`. Near-realtime; a 1-hour video transcribes in minutes. Model set by `MLX_WHISPER_MODEL` (default `mlx-community/whisper-large-v3-turbo`).
-- `local` — `faster-whisper` on CPU. Portable but slow for `large-v3` on long audio (many hours). Uses VAD to skip silence and all CPU cores. Model set by `LOCAL_WHISPER_MODEL` (`small`/`medium`/`large-v3-turbo`/`large-v3`).
-- `openai` — not implemented yet.
-
-Whisper progress is printed live to stderr (`whisper NN% (mm:ss / mm:ss)`) so a slow run is distinguishable from a hung one.
-
-SETTING UP & TESTING LOCAL MODELS:
-- I've opted for free local models since I'm cheap.
-- Run `ollama serve` to spin up server in a separate terminal
-- Run `ollama pull qwen2.5:14b` to download 14 billion param Qwen model
-- Run `ollama run qwen2.5:14b` to test model within terminal
-- Run curl command to API to test HTTP requests:
 ```bash
-curl http://localhost:11434/api/chat -d '{
-  "model": "qwen2.5:14b",
-  "messages": [{"role": "user", "content": "Translate to English: こんにちは、元気ですか？"}],
-  "stream": false
-}'
-```
-- To test local Whisper model:
-```bash
-python -c "
-from faster_whisper import WhisperModel
-print('Downloading model on first run...')
-m = WhisperModel('small', device='cpu', compute_type='int8')
-print('Ready:', m)
-"
+uvicorn app.main:app --reload
+# POST /jobs  {"youtube_url": "..."}
+# GET  /jobs/{job_id}
 ```
 
+## Outputs
 
-TODO:
-- upload to github repo
-- generate architecture diagram
-- setup intructions to run locally
-- example input/outputs
-- explanation of how it works
-- /examples folder with real transcripts and translations
-- logs of agent decisions
-- record demo video
-- host HuggingFace spaces, vercel SPA
+Written to `data/jobs/<job_id>/`:
+
+| File | When | Purpose |
+|------|------|---------|
+| `segments.json` | After transcribe | Editable Japanese transcript (input to translate phase) |
+| `output.txt` | After translate | Human-readable JA/EN blocks — **final result for reading** |
+| `output.json` | After translate | Machine-readable segments + metadata |
+| `output.ja.srt` | After translate | Japanese subtitles (video players, editors) |
+| `output.en.srt` | After translate | English subtitles |
+| `error.log` | On failure | Full Python traceback |
+| `whisper_raw.json` | After transcribe | Raw Whisper output |
+| `audio.wav` | After download | Extracted audio |
+
+### QA flags (in `output.txt` / `output.json`)
+
+| Flag | Meaning |
+|------|---------|
+| `low_confidence` | Whisper confidence < 0.7 on this segment |
+| `length_anomaly` | English is >2.5× longer than Japanese (possible over-translation) |
+| `empty_translation` | English field is blank |
+| `very_short` | Japanese text under 2 characters |
+
+Flags are review hints, not automatic errors. `length_anomaly` fires often on normal JA→EN because English is typically longer.
+
+## Configuration (`.env`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRANSCRIPTION_BACKEND` | `mlx` | `mlx` (Apple Silicon GPU) \| `local` (faster-whisper CPU) \| `openai` |
+| `MLX_WHISPER_MODEL` | `mlx-community/whisper-large-v3-turbo` | HuggingFace repo for mlx backend |
+| `LOCAL_WHISPER_MODEL` | `large-v3-turbo` | faster-whisper model when `backend=local` |
+| `TRANSLATION_BACKEND` | `ollama` | `ollama` \| `openai` |
+| `OLLAMA_MODEL` | `qwen2.5:14b` | Translation model (`qwen2.5:7b` for 8GB RAM) |
+| `WHISPER_MODE` | `always` | `always` \| `fallback_only` (skip Whisper if captions cover ≥95%) |
+| `USE_ARTIFACT_CACHE` | `true` | Reuse audio/captions/whisper/translations per URL |
+| `YTDLP_COOKIES_FROM_BROWSER` | — | For login-required Vimeo/YouTube (`chrome`, `safari`, etc.) |
+
+## Artifact cache
+
+Re-running the same URL reuses work from `data/cache/<url_hash>/`:
+
+| Cached artifact | Skips |
+|-----------------|-------|
+| `audio.wav` | Re-download |
+| `captions.ja.vtt` / `.srt` | Re-fetch captions |
+| `whisper_raw.json` | Re-transcribe (invalidated if whisper model changes) |
+| `translations.json` | Re-translate unchanged windows |
+
+Disable with `USE_ARTIFACT_CACHE=false`.
+
+## Transcription backends
+
+- **`mlx`** (default, Apple Silicon) — GPU via `mlx-whisper`. ~realtime or faster. First run downloads model weights (~1.6GB).
+- **`local`** — `faster-whisper` on CPU. Portable but very slow on long audio. Uses VAD + all CPU cores.
+- **`openai`** — not implemented.
+
+## Project layout
+
+```
+translation-agent/
+├── agents/           # translator (done), critic/repair (stubs)
+├── app/              # FastAPI + Streamlit
+├── core/             # downloader, captions, transcriber, merger, segmenter, qa, output, cache
+├── pipeline/         # orchestrator, cli, progress
+├── state/            # Job/Segment models, JSON persistence
+├── scripts/          # smoke_test.py
+├── data/
+│   ├── jobs/<id>/    # per-job artifacts
+│   └── cache/<hash>/ # shared cache per video URL
+├── config.py
+├── .env.example
+└── PLAN.md           # roadmap and architecture notes
+```
+
+## Roadmap
+
+See [PLAN.md](PLAN.md) for what's planned next (critic/repair loop, glossary, diarization, etc.).

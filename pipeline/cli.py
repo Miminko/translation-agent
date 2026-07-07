@@ -8,10 +8,24 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pipeline.orchestrator import create_and_run, run_job
+from pipeline.orchestrator import (
+    create_and_run,
+    create_and_transcribe,
+    run_job,
+    run_transcription,
+    run_translation,
+)
 from pipeline.progress import format_job_progress, run_with_progress, watch_job
 from state import store
 from state.models import JobStatus
+
+
+def _print_error_details(job) -> None:
+    if job.error:
+        print(f"Error: {job.error}")
+        error_log = store.job_dir(job.id) / "error.log"
+        if error_log.exists():
+            print(f"Details: {error_log}")
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -39,10 +53,54 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     print(f"Job {job.id}: {job.status.value}")
     if job.error:
-        print(f"Error: {job.error}")
-        error_log = store.job_dir(job.id) / "error.log"
-        if error_log.exists():
-            print(f"Details: {error_log}")
+        _print_error_details(job)
+        return 1
+    if job.status == JobStatus.completed:
+        job_dir = store.job_dir(job.id)
+        print(f"Output: {job_dir / 'output.txt'}")
+        print(f"Segments: {len(job.segments)}")
+    return 0 if job.status == JobStatus.completed else 1
+
+
+def cmd_transcribe(args: argparse.Namespace) -> int:
+    verbose = args.verbose
+    show_progress = args.progress and not verbose
+
+    if args.job_id:
+        job_id = args.job_id
+        runner = lambda: run_transcription(job_id, verbose=verbose)
+        job = run_with_progress(runner, job_id) if show_progress else runner()
+    elif show_progress:
+        job = store.create_job(args.url)
+        job = run_with_progress(
+            lambda: run_transcription(job.id, verbose=verbose), job.id
+        )
+    else:
+        job = create_and_transcribe(args.url, verbose=verbose)
+
+    print(f"Job {job.id}: {job.status.value}")
+    if job.error:
+        _print_error_details(job)
+        return 1
+    if job.status == JobStatus.transcribed:
+        review_path = store.segments_review_path(job.id)
+        print(f"Segments: {len(job.segments)}")
+        print(f"Review/edit transcript: {review_path}")
+        print(f"Then translate with: python -m pipeline.cli translate {job.id}")
+    return 0 if job.status == JobStatus.transcribed else 1
+
+
+def cmd_translate(args: argparse.Namespace) -> int:
+    verbose = args.verbose
+    show_progress = args.progress and not verbose
+    job_id = args.job_id
+
+    runner = lambda: run_translation(job_id, verbose=verbose)
+    job = run_with_progress(runner, job_id) if show_progress else runner()
+
+    print(f"Job {job.id}: {job.status.value}")
+    if job.error:
+        _print_error_details(job)
         return 1
     if job.status == JobStatus.completed:
         job_dir = store.job_dir(job.id)
@@ -58,11 +116,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"URL: {job.youtube_url}")
     if job.video_title:
         print(f"Title: {job.video_title}")
-    if job.error:
-        print(f"Error: {job.error}")
-        error_log = store.job_dir(args.job_id) / "error.log"
-        if error_log.exists():
-            print(f"Details: {error_log}")
+    _print_error_details(job)
     print(f"Segments: {len(job.segments)}")
     return 0
 
@@ -72,10 +126,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     job = watch_job(args.job_id, poll_interval=args.interval)
     print(f"Job {job.id}: {job.status.value}")
     if job.error:
-        print(f"Error: {job.error}")
-        error_log = store.job_dir(job.id) / "error.log"
-        if error_log.exists():
-            print(f"Details: {error_log}")
+        _print_error_details(job)
         return 1
     return 0 if job.status == JobStatus.completed else 1
 
@@ -111,6 +162,37 @@ def main() -> int:
     )
     run_parser.set_defaults(func=cmd_run)
 
+    tx_parser = subparsers.add_parser(
+        "transcribe",
+        help="Phase 1: download + transcribe + segment, then pause for review",
+    )
+    tx_parser.add_argument("url", nargs="?", help="Video URL (YouTube, Vimeo, etc.)")
+    tx_parser.add_argument("--job-id", help="Re-run transcription for an existing job id")
+    tx_parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Show yt-dlp output and stage logs (disables progress bar)",
+    )
+    tx_parser.add_argument(
+        "--progress", action=argparse.BooleanOptionalAction, default=True,
+        help="Show live progress bar while the job runs (default: on)",
+    )
+    tx_parser.set_defaults(func=cmd_transcribe)
+
+    tr_parser = subparsers.add_parser(
+        "translate",
+        help="Phase 2: translate reviewed segments (reads segments.json) + write outputs",
+    )
+    tr_parser.add_argument("job_id")
+    tr_parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Show per-window translation progress (disables progress bar)",
+    )
+    tr_parser.add_argument(
+        "--progress", action=argparse.BooleanOptionalAction, default=True,
+        help="Show live progress bar while the job runs (default: on)",
+    )
+    tr_parser.set_defaults(func=cmd_translate)
+
     status_parser = subparsers.add_parser("status", help="Show job status")
     status_parser.add_argument("job_id")
     status_parser.set_defaults(func=cmd_status)
@@ -129,8 +211,8 @@ def main() -> int:
     list_parser.set_defaults(func=cmd_list)
 
     args = parser.parse_args()
-    if args.command == "run" and not args.job_id and not args.url:
-        parser.error("run requires a video URL or --job-id")
+    if args.command in ("run", "transcribe") and not args.job_id and not args.url:
+        parser.error(f"{args.command} requires a video URL or --job-id")
     return args.func(args)
 
 
