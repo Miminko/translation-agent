@@ -1,5 +1,6 @@
 ollama
 faster-whisper
+mlx-whisper; platform_system == "Darwin" and platform_machine == "arm64"
 yt-dlp
 fastapi
 uvicorn[standard]

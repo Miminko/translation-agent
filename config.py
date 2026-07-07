@@ -17,13 +17,15 @@ class Settings(BaseSettings):
     translation_model: str = "gpt-4.1-mini"
     data_dir: str = "./data"
     whisper_mode: Literal["always", "fallback_only"] = "always"
-    transcription_backend: Literal["local", "openai"] = "local"
+    transcription_backend: Literal["local", "mlx", "openai"] = "mlx"
     translation_backend: Literal["ollama", "openai"] = "ollama"
-    local_whisper_model: str = "large-v3"
+    local_whisper_model: str = "large-v3-turbo"
+    mlx_whisper_model: str = "mlx-community/whisper-large-v3-turbo"
     ollama_model: str = "qwen2.5:14b"
     ollama_base_url: str = "http://localhost:11434"
     ytdlp_cookies_from_browser: Optional[str] = None  # e.g. chrome, safari, firefox
     ytdlp_cookies_file: Optional[str] = None          # path to Netscape cookies.txt
+    use_artifact_cache: bool = True                     # reuse download/transcribe artifacts per URL
 
     @field_validator("openai_api_key", "ytdlp_cookies_from_browser", "ytdlp_cookies_file", mode="before")
     @classmethod
@@ -47,6 +49,13 @@ class Settings(BaseSettings):
     @property
     def data_path(self) -> Path:
         return Path(self.data_dir).resolve()
+
+    @property
+    def active_whisper_model(self) -> str:
+        """Model identifier for the active transcription backend (cache key)."""
+        if self.transcription_backend == "mlx":
+            return self.mlx_whisper_model
+        return self.local_whisper_model
 
 
 settings = Settings()
