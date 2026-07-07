@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Set, TypedDict
@@ -9,12 +8,10 @@ from typing import Callable, List, Optional, Set, TypedDict
 from langgraph.graph import END, StateGraph
 
 from agents import critic, repair
+from agents.progress_log import log
 from config import settings
+from core import qa
 from state.models import Job, Segment
-
-
-def _log(message: str) -> None:
-    print(message, file=sys.stderr, flush=True)
 
 
 class RefinementState(TypedDict):
@@ -29,6 +26,7 @@ class RefinementSummary:
     iterations: int = 0
     total_flagged: int = 0
     total_repaired: int = 0
+    skipped: bool = False
     log: list[dict] = field(default_factory=list)
 
 
@@ -46,6 +44,13 @@ def _route_after_repair(state: RefinementState) -> str:
     return "critique"
 
 
+def _initial_critique_ids(segments: List[Segment]) -> Optional[Set[int]]:
+    if settings.refinement_critique_mode == "all":
+        return None
+    candidates = qa.refinement_candidates(segments)
+    return candidates or set()
+
+
 def refine_segments(
     segments: List[Segment],
     job: Job,
@@ -55,19 +60,41 @@ def refine_segments(
     on_progress: Optional[Callable[[List[Segment], int, int], None]] = None,
     log_path: Optional[Path] = None,
 ) -> tuple[List[Segment], RefinementSummary]:
-    """Translate → critique → repair loop via LangGraph."""
+    """Critique → repair loop via LangGraph."""
     use_refinement = settings.refinement_enabled if enabled is None else enabled
-    if not segments or not use_refinement:
-        return segments, RefinementSummary()
-
     summary = RefinementSummary()
-    only_ids: Optional[Set[int]] = None
+
+    if not segments or not use_refinement:
+        summary.skipped = True
+        return segments, summary
+
+    only_ids: Optional[Set[int]] = _initial_critique_ids(segments)
+    if only_ids is not None and not only_ids:
+        summary.skipped = True
+        if verbose:
+            log("  refinement: skipped (no heuristic flags in flagged_only mode)")
+        if log_path is not None:
+            log_path.write_text(
+                json.dumps(
+                    {
+                        "enabled": True,
+                        "skipped": True,
+                        "reason": "no_heuristic_flags",
+                        "critique_mode": settings.refinement_critique_mode,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        return segments, summary
 
     def critique_step(state: RefinementState) -> RefinementState:
         nonlocal only_ids
         if verbose:
             phase = "re-critique" if state["iteration"] > 0 else "critique"
-            _log(f"  refinement: {phase} (iteration {state['iteration'] + 1})")
+            scope = f"{len(only_ids)} segments" if only_ids else "all segments"
+            log(f"  refinement: {phase} on {scope} (cycle {state['iteration'] + 1})")
         updated, repair_ids = critic.critique_segments(
             state["segments"],
             job,
@@ -81,6 +108,7 @@ def refine_segments(
                 "iteration": state["iteration"] + 1,
                 "phase": "critique",
                 "flagged": len(repair_ids),
+                "scope": len(only_ids) if only_ids else len(state["segments"]),
             }
         )
         only_ids = None
@@ -93,23 +121,24 @@ def refine_segments(
 
     def repair_step(state: RefinementState) -> RefinementState:
         if verbose:
-            _log(
-                f"  refinement: repair {len(state['repair_ids'])} segments "
-                f"(iteration {state['iteration'] + 1})"
+            log(
+                f"  refinement: repairing {len(state['repair_ids'])} segments "
+                f"(cycle {state['iteration'] + 1})"
             )
-        updated = repair.repair_segments(
+        updated, repaired = repair.repair_segments(
             state["segments"],
             job,
             state["repair_ids"],
             verbose=verbose,
             on_progress=on_progress,
         )
-        summary.total_repaired += len(state["repair_ids"])
+        summary.total_repaired += repaired
         summary.log.append(
             {
                 "iteration": state["iteration"] + 1,
                 "phase": "repair",
-                "repaired": len(state["repair_ids"]),
+                "requested": len(state["repair_ids"]),
+                "repaired": repaired,
             }
         )
         nonlocal only_ids
@@ -136,14 +165,14 @@ def refine_segments(
         {"critique": "critique", "finish": END},
     )
 
-    compiled = graph.compile()
-    initial: RefinementState = {
-        "segments": segments,
-        "iteration": 0,
-        "repair_ids": set(),
-        "done": False,
-    }
-    final = compiled.invoke(initial)
+    final = graph.compile().invoke(
+        {
+            "segments": segments,
+            "iteration": 0,
+            "repair_ids": set(),
+            "done": False,
+        }
+    )
     summary.iterations = final["iteration"]
 
     if log_path is not None:
@@ -151,6 +180,8 @@ def refine_segments(
             json.dumps(
                 {
                     "enabled": True,
+                    "skipped": False,
+                    "critique_mode": settings.refinement_critique_mode,
                     "max_iterations": settings.refinement_max_iterations,
                     "confidence_threshold": settings.refinement_confidence_threshold,
                     "iterations": summary.iterations,

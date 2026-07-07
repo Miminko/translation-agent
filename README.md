@@ -103,8 +103,44 @@ streamlit run app/streamlit_app.py
 
 ```bash
 uvicorn app.main:app --reload
-# POST /jobs  {"youtube_url": "..."}
-# GET  /jobs/{job_id}
+```
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/jobs` | Create job; `auto_start`: `run` (default), `transcribe`, or `none` |
+| `POST` | `/jobs/transcribe` | Create job + start transcription (phase 1) |
+| `POST` | `/jobs/{id}/transcribe` | Transcribe existing job |
+| `POST` | `/jobs/{id}/translate` | Translate after review; body: `{"refine": true}` optional |
+| `POST` | `/jobs/{id}/run` | Full pipeline on existing job |
+| `GET` | `/jobs` | List jobs |
+| `GET` | `/jobs/{id}` | Job status + segments |
+| `GET` | `/jobs/{id}/segments` | Download `segments.json` for review |
+| `PUT` | `/jobs/{id}/segments` | Upload edited segments before translate |
+| `GET` | `/jobs/{id}/output` | Download `output.json` |
+| `GET` | `/jobs/{id}/output.srt?lang=en` | Download SRT |
+| `GET` | `/jobs/{id}/refinement_log` | Critic/repair stats |
+
+Example two-phase flow:
+
+```bash
+# 1. Start transcription
+curl -X POST http://localhost:8000/jobs/transcribe \
+  -H "Content-Type: application/json" \
+  -d '{"youtube_url": "https://vimeo.com/VIDEO_ID"}'
+
+# 2. Poll until status = transcribed
+curl http://localhost:8000/jobs/{job_id}
+
+# 3. (Optional) edit segments — download, edit locally, upload
+curl http://localhost:8000/jobs/{job_id}/segments -o segments.json
+curl -X PUT http://localhost:8000/jobs/{job_id}/segments \
+  -H "Content-Type: application/json" \
+  -d @segments.json
+
+# 4. Translate
+curl -X POST http://localhost:8000/jobs/{job_id}/translate \
+  -H "Content-Type: application/json" \
+  -d '{"refine": true}'
 ```
 
 ## Outputs
@@ -151,6 +187,7 @@ Flags are review hints, not automatic errors. `length_anomaly` fires often on no
 | `REFINEMENT_ENABLED` | `true` | Run critic/repair loop after translation |
 | `REFINEMENT_CONFIDENCE_THRESHOLD` | `0.7` | Re-translate segments with critic score below this |
 | `REFINEMENT_MAX_ITERATIONS` | `2` | Max critique→repair cycles |
+| `REFINEMENT_CRITIQUE_MODE` | `flagged_only` | `flagged_only` (heuristic pre-filter, fast) or `all` (every segment) |
 | `YTDLP_COOKIES_FROM_BROWSER` | — | For login-required Vimeo/YouTube (`chrome`, `safari`, etc.) |
 
 ## Artifact cache

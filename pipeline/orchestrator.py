@@ -177,12 +177,15 @@ def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool
                 log_path=job_dir / "refinement_log.json",
             )
             if verbose:
-                _log(
-                    f"[{job_id}] Refinement done: "
-                    f"{refinement_summary.total_flagged} flagged, "
-                    f"{refinement_summary.total_repaired} repaired, "
-                    f"{refinement_summary.iterations} iteration(s)"
-                )
+                if refinement_summary.skipped:
+                    _log(f"[{job_id}] Refinement skipped (no segments needed review)")
+                else:
+                    _log(
+                        f"[{job_id}] Refinement done: "
+                        f"{refinement_summary.total_flagged} flagged, "
+                        f"{refinement_summary.total_repaired} repaired, "
+                        f"{refinement_summary.iterations} cycle(s)"
+                    )
 
         job.segments = qa.flag_segments(job.segments)
         output.write_output(job, job_dir)

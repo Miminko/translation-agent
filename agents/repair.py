@@ -1,28 +1,13 @@
 from __future__ import annotations
 
-import sys
 import time
 from typing import Callable, Dict, List, Optional, Set
 
 from agents.llm_utils import extract_json, parse_id
+from agents.progress_log import fmt_duration, log
 from core.providers.translation import get_translator
 from core.segmenter import paragraph_windows
 from state.models import Job, Segment
-
-
-def _log(message: str) -> None:
-    print(message, file=sys.stderr, flush=True)
-
-
-def _fmt_duration(seconds: float) -> str:
-    seconds = int(seconds)
-    minutes, secs = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours}h{minutes:02d}m"
-    if minutes:
-        return f"{minutes}m{secs:02d}s"
-    return f"{secs}s"
 
 
 def _build_system_prompt(job: Job) -> str:
@@ -108,34 +93,42 @@ def repair_segments(
     *,
     verbose: bool = False,
     on_progress: Optional[Callable[[List[Segment], int, int], None]] = None,
-) -> List[Segment]:
-    """Re-translate segments flagged by the critic."""
+) -> tuple[List[Segment], int]:
+    """Re-translate segments flagged by the critic. Returns updated segments and repair count."""
     if not segments or not repair_ids:
-        return segments
+        return segments, 0
 
     updated = list(segments)
     segment_by_id = {segment.id: index for index, segment in enumerate(updated)}
     windows = paragraph_windows(segments)
-    total_windows = len(windows)
+    windows_with_repairs = [
+        (index, [segment for segment in window if segment.id in repair_ids])
+        for index, window in enumerate(windows, start=1)
+        if any(segment.id in repair_ids for segment in window)
+    ]
+    total_windows = len(windows_with_repairs)
     done_segments = 0
     repaired_count = 0
     start = time.time()
 
-    for window_index, window in enumerate(windows, start=1):
-        flagged = [segment for segment in window if segment.id in repair_ids]
-        if not flagged:
-            continue
-
+    for window_index, (_, flagged) in enumerate(windows_with_repairs, start=1):
         mapping = _repair_window(flagged, job)
         for segment_id, english in mapping.items():
-            if segment_id not in segment_by_id:
+            if segment_id not in segment_by_id or not english:
                 continue
             index = segment_by_id[segment_id]
             flags = list(updated[index].flags)
             if "critic_repaired" not in flags:
                 flags.append("critic_repaired")
+            if "critic_flagged" in flags:
+                flags.remove("critic_flagged")
             updated[index] = updated[index].model_copy(
-                update={"english": english, "revised": True, "flags": flags}
+                update={
+                    "english": english,
+                    "revised": True,
+                    "flags": flags,
+                    "critic_suggestion": None,
+                }
             )
             repaired_count += 1
 
@@ -147,10 +140,10 @@ def repair_segments(
             elapsed = time.time() - start
             rate = window_index / elapsed if elapsed > 0 else 0
             remaining = (total_windows - window_index) / rate if rate > 0 else 0
-            _log(
+            log(
                 f"\033[2K\r  repairing window {window_index}/{total_windows} "
                 f"({repaired_count}/{len(repair_ids)} segments) "
-                f"· {_fmt_duration(elapsed)} elapsed · ~{_fmt_duration(remaining)} left"
+                f"· {fmt_duration(elapsed)} elapsed · ~{fmt_duration(remaining)} left"
             )
 
-    return updated
+    return updated, repaired_count

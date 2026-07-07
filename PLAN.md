@@ -62,7 +62,7 @@ Deterministic pipeline with human-in-the-loop review between transcription and t
 - **`length_anomaly` false positives** — Japanese is compact; English is often >2.5× longer even when correct.
 - **No speaker diarization** — all speech treated as one stream.
 - **No visual context** — audio-only; can't resolve references to slides/images.
-- **API doesn't expose two-phase endpoints yet** — CLI and Streamlit do; FastAPI still runs full pipeline.
+- **API two-phase endpoints** — `POST /jobs/transcribe`, `/jobs/{id}/translate`, `GET/PUT /segments`
 - **Critic/repair wired** — LangGraph loop after translation (`agents/refinement.py`)
 
 ---
@@ -85,8 +85,6 @@ Disable with `REFINEMENT_ENABLED=false` or `--no-refinement` on CLI.
 
 ### Still planned (Phase 2+)
 
-- LangGraph state persistence across jobs
-- FastAPI separate transcribe/translate/refine endpoints
 - Evaluation metrics dashboard (edit distance, correction rate)
 
 ---

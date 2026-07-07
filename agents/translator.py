@@ -1,29 +1,13 @@
 from __future__ import annotations
 
-import json
-import re
-import sys
 import time
 from typing import Callable, Dict, List, Optional
 
+from agents.llm_utils import extract_json, parse_id
+from agents.progress_log import fmt_duration, log
 from core.providers.translation import get_translator
 from core.segmenter import paragraph_windows
 from state.models import Job, Segment
-
-
-def _log(message: str) -> None:
-    print(message, file=sys.stderr, flush=True)
-
-
-def _fmt_duration(seconds: float) -> str:
-    seconds = int(seconds)
-    minutes, secs = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours}h{minutes:02d}m"
-    if minutes:
-        return f"{minutes}m{secs:02d}s"
-    return f"{secs}s"
 
 
 def _build_system_prompt(job: Job) -> str:
@@ -56,34 +40,7 @@ def _build_window_prompt(
     return "\n".join(lines)
 
 
-def _extract_json(text: str) -> Optional[dict]:
-    text = text.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        return None
-    try:
-        return json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
-
-
-def _apply_translations(segments: List[Segment], mapping: Dict[int, str]) -> List[Segment]:
-    updated: List[Segment] = []
-    for segment in segments:
-        english = mapping.get(segment.id)
-        updated.append(segment.model_copy(update={"english": english}))
-    return updated
-
-
-def _parse_translation_items(
-    items: list,
-    window: List[Segment],
-) -> Dict[int, str]:
-    """Map segment ids to English; tolerate models that omit or rename keys."""
+def _parse_translation_items(items: list, window: List[Segment]) -> Dict[int, str]:
     mapping: Dict[int, str] = {}
     for index, item in enumerate(items):
         if not isinstance(item, dict):
@@ -91,12 +48,8 @@ def _parse_translation_items(
         english = item.get("english") or item.get("translation") or item.get("text")
         if english is None:
             continue
-        raw_id = item.get("id") or item.get("segment_id") or item.get("line")
-        if raw_id is not None:
-            segment_id = int(raw_id)
-        elif index < len(window):
-            segment_id = window[index].id
-        else:
+        segment_id = parse_id(item, index, window[index].id if index < len(window) else None)
+        if segment_id is None:
             continue
         mapping[segment_id] = str(english).strip()
     return mapping
@@ -111,11 +64,8 @@ def _translate_window(
     system_prompt = _build_system_prompt(job)
     user_prompt = _build_window_prompt(window, previous_context)
 
-    response = translator.translate(
-        user_prompt,
-        system_prompt=system_prompt,
-    )
-    payload = _extract_json(response)
+    response = translator.translate(user_prompt, system_prompt=system_prompt)
+    payload = extract_json(response)
     if payload and "translations" in payload:
         mapping = _parse_translation_items(payload["translations"], window)
         if mapping:
@@ -123,7 +73,7 @@ def _translate_window(
 
     retry_prompt = user_prompt + "\nRespond ONLY with valid JSON. No markdown."
     response = translator.translate(retry_prompt, system_prompt=system_prompt)
-    payload = _extract_json(response)
+    payload = extract_json(response)
     if payload and "translations" in payload:
         mapping = _parse_translation_items(payload["translations"], window)
         if mapping:
@@ -131,10 +81,7 @@ def _translate_window(
 
     mapping = {}
     for segment in window:
-        english = translator.translate(
-            segment.japanese,
-            system_prompt=system_prompt,
-        )
+        english = translator.translate(segment.japanese, system_prompt=system_prompt)
         mapping[segment.id] = english.strip()
     return mapping
 
@@ -198,7 +145,6 @@ def translate_segments(
         if on_progress:
             on_progress(updated, done_segments, total_segments)
 
-        # Persist the cache periodically so an interrupted run resumes cheaply.
         if dirty and cache_save and window_index % 10 == 0:
             cache_save(cache)
             dirty = False
@@ -207,10 +153,10 @@ def translate_segments(
             elapsed = time.time() - start
             rate = window_index / elapsed if elapsed > 0 else 0
             remaining = (total_windows - window_index) / rate if rate > 0 else 0
-            _log(
+            log(
                 f"\033[2K\r  translating window {window_index}/{total_windows} "
                 f"({done_segments}/{total_segments} segments, {cache_hits} cached) "
-                f"· {_fmt_duration(elapsed)} elapsed · ~{_fmt_duration(remaining)} left"
+                f"· {fmt_duration(elapsed)} elapsed · ~{fmt_duration(remaining)} left"
             )
 
     if dirty and cache_save:

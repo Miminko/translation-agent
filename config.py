@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     refinement_enabled: bool = True                     # critic/repair loop after translation
     refinement_confidence_threshold: float = 0.7        # re-translate segments below this score
     refinement_max_iterations: int = 2                  # max critique→repair cycles
+    refinement_critique_mode: Literal["flagged_only", "all"] = "flagged_only"
 
     @field_validator("openai_api_key", "ytdlp_cookies_from_browser", "ytdlp_cookies_file", mode="before")
     @classmethod

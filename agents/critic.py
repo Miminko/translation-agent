@@ -1,30 +1,15 @@
 from __future__ import annotations
 
-import sys
 import time
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Set
 
 from agents.llm_utils import clamp_confidence, extract_json, parse_id
+from agents.progress_log import fmt_duration, log
 from config import settings
 from core.providers.translation import get_translator
 from core.segmenter import paragraph_windows
 from state.models import Job, Segment
-
-
-def _log(message: str) -> None:
-    print(message, file=sys.stderr, flush=True)
-
-
-def _fmt_duration(seconds: float) -> str:
-    seconds = int(seconds)
-    minutes, secs = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours}h{minutes:02d}m"
-    if minutes:
-        return f"{minutes}m{secs:02d}s"
-    return f"{secs}s"
 
 
 @dataclass
@@ -74,7 +59,7 @@ def _parse_reviews(payload: dict, window: List[Segment]) -> Dict[int, CritiqueRe
             continue
         issues_raw = item.get("issues") or []
         issues = [str(issue).strip() for issue in issues_raw if str(issue).strip()]
-        corrected = item.get("corrected_english") or item.get("english")
+        corrected = item.get("corrected_english") or item.get("suggested_english")
         corrected_english = str(corrected).strip() if corrected else None
         results[segment_id] = CritiqueResult(
             confidence=clamp_confidence(item.get("confidence")),
@@ -125,28 +110,38 @@ def critique_segments(
     updated = list(segments)
     segment_by_id = {segment.id: index for index, segment in enumerate(updated)}
     windows = paragraph_windows(segments)
-    total_windows = len(windows)
+    critique_windows = []
+    for window in windows:
+        if only_ids is not None:
+            filtered = [segment for segment in window if segment.id in only_ids]
+            if filtered:
+                critique_windows.append(filtered)
+        else:
+            critique_windows.append(window)
+
+    total_windows = len(critique_windows)
     done_segments = 0
     repair_ids: Set[int] = set()
     start = time.time()
 
-    for window_index, window in enumerate(windows, start=1):
-        if only_ids is not None:
-            window = [segment for segment in window if segment.id in only_ids]
-            if not window:
-                continue
-
+    for window_index, window in enumerate(critique_windows, start=1):
         reviews = _critique_window(window, job)
         for segment in window:
             result = reviews.get(segment.id)
-            if result is None:
-                continue
             index = segment_by_id[segment.id]
             flags = list(updated[index].flags)
+
+            if result is None:
+                # No critic response for this line — leave prior scores untouched.
+                continue
+
             if _needs_repair(result):
                 repair_ids.add(segment.id)
                 if "critic_flagged" not in flags:
                     flags.append("critic_flagged")
+            elif "critic_flagged" in flags:
+                flags.remove("critic_flagged")
+
             updated[index] = updated[index].model_copy(
                 update={
                     "translation_confidence": result.confidence,
@@ -158,16 +153,16 @@ def critique_segments(
 
         done_segments += len(window)
         if on_progress:
-            on_progress(updated, done_segments, len(segments))
+            on_progress(updated, done_segments, total_windows)
 
         if verbose:
             elapsed = time.time() - start
             rate = window_index / elapsed if elapsed > 0 else 0
             remaining = (total_windows - window_index) / rate if rate > 0 else 0
-            _log(
+            log(
                 f"\033[2K\r  critiquing window {window_index}/{total_windows} "
-                f"({done_segments}/{len(segments)} segments, {len(repair_ids)} flagged) "
-                f"· {_fmt_duration(elapsed)} elapsed · ~{_fmt_duration(remaining)} left"
+                f"({done_segments} segments, {len(repair_ids)} flagged) "
+                f"· {fmt_duration(elapsed)} elapsed · ~{fmt_duration(remaining)} left"
             )
 
     return updated, repair_ids
