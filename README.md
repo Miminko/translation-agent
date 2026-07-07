@@ -1,5 +1,7 @@
 # Translation Agent
 
+[![Tests](https://github.com/Miminko/translation-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/Miminko/translation-agent/actions/workflows/tests.yml)
+
 Japanese → English transcription and translation pipeline for long-form video (YouTube, Vimeo). Local-first: **mlx-whisper** on Apple Silicon for transcription, **Ollama (Qwen2.5)** for translation.
 
 Paste a video URL, get time-aligned Japanese transcription, review/edit it, then translate to English with QA flags and subtitle exports.
