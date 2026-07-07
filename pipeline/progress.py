@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+from config import settings
 from state import store
 from state.models import Job, JobStatus
 
@@ -72,7 +73,6 @@ def format_job_progress(job: Job, *, elapsed: Optional[float] = None) -> str:
     if job.status == JobStatus.downloading:
         # Use the settings path directly to avoid store.job_dir() creating the
         # directory as a side effect inside this read-only formatting function.
-        from config import settings
         job_dir_path = settings.data_path / "jobs" / job.id
         if job_dir_path.is_dir():
             downloaded = _partial_download_bytes(job_dir_path)

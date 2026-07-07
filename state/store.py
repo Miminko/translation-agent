@@ -56,15 +56,22 @@ def load_job(job_id: str) -> Job:
     return Job.model_validate_json(path.read_text(encoding="utf-8"))
 
 
+def _entry_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def list_jobs() -> List[Job]:
     jobs: List[Job] = []
     root = _jobs_root()
-    for entry in sorted(root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+    for entry in sorted(root.iterdir(), key=_entry_mtime, reverse=True):
         job_file = entry / "job.json"
         if job_file.is_file():
             try:
                 jobs.append(Job.model_validate_json(job_file.read_text(encoding="utf-8")))
-            except (json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError, OSError):
                 continue
     return jobs
 

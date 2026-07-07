@@ -34,6 +34,10 @@ class CreateJobRequest(BaseModel):
     auto_start: Literal["run", "transcribe", "none"] = "run"
 
 
+class TranscribeRequest(BaseModel):
+    youtube_url: HttpUrl
+
+
 class TranslateRequest(BaseModel):
     refine: Optional[bool] = None
 
@@ -92,7 +96,7 @@ def create_job(request: CreateJobRequest, background_tasks: BackgroundTasks) -> 
 
 @app.post("/jobs/transcribe")
 def create_and_start_transcription(
-    request: CreateJobRequest,
+    request: TranscribeRequest,
     background_tasks: BackgroundTasks,
 ) -> dict:
     """Create a job and start transcription only (phase 1)."""
@@ -171,15 +175,7 @@ def get_review_segments(job_id: str) -> FileResponse:
 def update_review_segments(job_id: str, segments: List[SegmentReview]) -> dict:
     """Upload edited segments.json before running translate."""
     job = _get_job_or_404(job_id)
-    parsed = [
-        Segment.model_validate(
-            {
-                **segment.model_dump(),
-                "source": segment.source,
-            }
-        )
-        for segment in segments
-    ]
+    parsed = [Segment.model_validate(segment.model_dump()) for segment in segments]
     store.write_review_segments(job_id, parsed)
     job.segments = parsed
     store.save_job(job)

@@ -10,12 +10,21 @@ from config import settings
 
 _VIMEO_URL = re.compile(r"^https?://(?:www\.)?vimeo\.com/(\d+)(?:/([a-f0-9]+))?", re.I)
 
-# Query parameters that carry the video identity and must be preserved.
+# Hostnames (after stripping the www. prefix) whose video identity lives in
+# a query parameter rather than the path.  Maps hostname → params to keep.
 _IDENTITY_PARAMS: dict[str, set[str]] = {
-    "youtube.com": {"v"},
-    "youtu.be": set(),
-    "vimeo.com": set(),
+    "youtube.com": {"v"},   # www / m / music subdomains all use ?v=
+    "youtu.be": set(),      # identity is in path; drop all query params
 }
+
+
+def _canonical_hostname(netloc: str) -> str:
+    """Return the bare hostname, stripping www. / m. / music. sub-prefixes."""
+    host = netloc.lower()
+    for prefix in ("www.", "m.", "music."):
+        if host.startswith(prefix):
+            return host[len(prefix):]
+    return host
 
 
 def normalize_video_url(url: str) -> str:
@@ -23,7 +32,8 @@ def normalize_video_url(url: str) -> str:
 
     - Vimeo: canonical numeric path, keep unlisted hash, drop query string.
     - YouTube watch URLs: keep the ``v`` parameter; drop everything else
-      (``t``, ``si``, ``list``, UTM params, etc.).
+      (``t``, ``si``, ``list``, UTM params, etc.).  Handles www., m., and
+      music. subdomains.
     - youtu.be short links: identity is in the path, drop all query params.
     - Everything else: drop query string, fragment, and credentials.
     """
@@ -39,8 +49,7 @@ def normalize_video_url(url: str) -> str:
     if not (parsed.scheme and parsed.netloc):
         return url
 
-    # Determine which query params to keep based on hostname.
-    hostname = parsed.netloc.lower().lstrip("www.")
+    hostname = _canonical_hostname(parsed.netloc)
     keep_params = _IDENTITY_PARAMS.get(hostname, set())
 
     if keep_params and parsed.query:
@@ -72,8 +81,14 @@ def run_yt_dlp(args: List[str], *, show_progress: bool = False) -> subprocess.Co
     _require_tool("yt-dlp")
     full_args = [*ytdlp_auth_args(), *args]
     if show_progress:
+        # Let stdout reach the terminal for live progress; capture only stderr
+        # so we can include it in any RuntimeError message.
         full_args = ["--progress", "--newline", *full_args]
-        result = subprocess.run(["yt-dlp", *full_args], text=True)
+        result = subprocess.run(
+            ["yt-dlp", *full_args],
+            stderr=subprocess.PIPE,
+            text=True,
+        )
     else:
         result = subprocess.run(
             ["yt-dlp", *full_args],

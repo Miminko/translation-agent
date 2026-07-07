@@ -22,6 +22,18 @@ def test_normalize_video_url_different_videos_differ() -> None:
     assert url1 != url2
 
 
+def test_normalize_video_url_youtube_mobile_subdomain() -> None:
+    """m.youtube.com URLs must preserve the v= param like www. does."""
+    assert normalize_video_url("https://m.youtube.com/watch?v=abc123&t=10") == \
+        "https://m.youtube.com/watch?v=abc123"
+
+
+def test_normalize_video_url_youtube_music_subdomain() -> None:
+    """music.youtube.com URLs must preserve the v= param."""
+    assert normalize_video_url("https://music.youtube.com/watch?v=abc123&list=PL1") == \
+        "https://music.youtube.com/watch?v=abc123"
+
+
 def test_normalize_video_url_vimeo_canonical() -> None:
     assert normalize_video_url("https://vimeo.com/123456?share=copy") == "https://vimeo.com/123456"
 

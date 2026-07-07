@@ -29,7 +29,7 @@ def test_render_bar() -> None:
     assert "░" in bar
 
 
-def test_format_job_progress_translating(sample_job) -> None:
+def test_format_job_progress_translating() -> None:
     from datetime import datetime, timezone
 
     job = Job(
