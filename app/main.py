@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Callable, List, Literal, Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -95,6 +95,29 @@ def _mark_started(job: Job, status: JobStatus) -> None:
     store.save_job(job)
 
 
+def _launch(
+    job: Job,
+    status: JobStatus,
+    background_tasks: BackgroundTasks,
+    runner: Callable[..., object],
+    **runner_kwargs: object,
+) -> dict:
+    """Claim the job, mark it started, and schedule the background runner.
+
+    The lock is acquired here (not inside the worker) so concurrent starts get a
+    clean 409. If anything fails before the task is queued we release the claim,
+    otherwise the worker owns the token and releases it when it finishes.
+    """
+    token = _claim(job)
+    try:
+        _mark_started(job, status)
+        background_tasks.add_task(runner, job.id, lock_token=token, **runner_kwargs)
+    except Exception:
+        store.release_job_lock(job.id, token)
+        raise
+    return {"job_id": job.id, "status": status.value}
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -108,10 +131,7 @@ def create_job(request: CreateJobRequest, background_tasks: BackgroundTasks) -> 
         return {"job_id": job.id, "status": job.status.value}
 
     runner = run_transcription if request.auto_start == "transcribe" else run_job
-    token = store.acquire_job_lock(job.id)
-    _mark_started(job, JobStatus.downloading)
-    background_tasks.add_task(runner, job.id, lock_token=token)
-    return {"job_id": job.id, "status": JobStatus.downloading.value}
+    return _launch(job, JobStatus.downloading, background_tasks, runner)
 
 
 @app.post("/jobs/transcribe")
@@ -121,10 +141,7 @@ def create_and_start_transcription(
 ) -> dict:
     """Create a job and start transcription only (phase 1)."""
     job = store.create_job(str(request.source_url))
-    token = store.acquire_job_lock(job.id)
-    _mark_started(job, JobStatus.downloading)
-    background_tasks.add_task(run_transcription, job.id, lock_token=token)
-    return {"job_id": job.id, "status": JobStatus.downloading.value}
+    return _launch(job, JobStatus.downloading, background_tasks, run_transcription)
 
 
 @app.get("/jobs", response_model=List[JobSummary])
@@ -150,10 +167,7 @@ def get_job(job_id: str) -> Job:
 def start_transcription(job_id: str, background_tasks: BackgroundTasks) -> dict:
     """Run phase 1: download + transcribe + segment. Ends at status transcribed."""
     job = _get_job_or_404(job_id)
-    token = _claim(job)
-    _mark_started(job, JobStatus.downloading)
-    background_tasks.add_task(run_transcription, job.id, lock_token=token)
-    return {"job_id": job.id, "status": JobStatus.downloading.value}
+    return _launch(job, JobStatus.downloading, background_tasks, run_transcription)
 
 
 @app.post("/jobs/{job_id}/translate")
@@ -174,20 +188,14 @@ def start_translation(
             detail="No segments to translate. Run POST /jobs/{job_id}/transcribe first.",
         )
     refine = body.refine if body else None
-    token = _claim(job)
-    _mark_started(job, JobStatus.translating)
-    background_tasks.add_task(run_translation, job.id, refine=refine, lock_token=token)
-    return {"job_id": job.id, "status": JobStatus.translating.value}
+    return _launch(job, JobStatus.translating, background_tasks, run_translation, refine=refine)
 
 
 @app.post("/jobs/{job_id}/run")
 def start_full_pipeline(job_id: str, background_tasks: BackgroundTasks) -> dict:
     """Run full pipeline: transcribe then translate (no review pause)."""
     job = _get_job_or_404(job_id)
-    token = _claim(job)
-    _mark_started(job, JobStatus.downloading)
-    background_tasks.add_task(run_job, job.id, lock_token=token)
-    return {"job_id": job.id, "status": JobStatus.downloading.value}
+    return _launch(job, JobStatus.downloading, background_tasks, run_job)
 
 
 @app.get("/jobs/{job_id}/segments")

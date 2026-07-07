@@ -243,3 +243,33 @@ def test_get_output_not_ready(client: TestClient, tmp_data_dir) -> None:
     job = store.create_job("https://vimeo.com/609")
     response = client.get(f"/jobs/{job.id}/output")
     assert response.status_code == 404
+
+
+def test_start_transcription_conflict_when_locked(
+    client: TestClient, tmp_data_dir
+) -> None:
+    job = store.create_job("https://vimeo.com/611")
+    store.acquire_job_lock(job.id)  # another runner already holds the claim
+
+    response = client.post(f"/jobs/{job.id}/transcribe")
+
+    assert response.status_code == 409
+
+
+def test_launch_releases_lock_when_start_fails(
+    client: TestClient, tmp_data_dir, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.main as main
+
+    job = store.create_job("https://vimeo.com/612")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(main, "_mark_started", boom)
+
+    with pytest.raises(RuntimeError):
+        client.post(f"/jobs/{job.id}/run")
+
+    # The synchronously-acquired lock must not leak on a failed start.
+    assert store.is_job_locked(job.id) is False
