@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import sys
+import traceback
 
 from config import settings
-from core import captions, downloader, merger, output, qa, segmenter, transcriber
+from core import cache, merger, output, qa, segmenter
 from core.providers.transcription import unload_whisper_model
 from state.models import Job, JobStatus
 from state import store
@@ -24,31 +25,42 @@ def run_job(job_id: str, *, verbose: bool = False) -> Job:
         if verbose:
             _log(f"[{job_id}] Downloading audio...")
 
-        dl = downloader.download(job.youtube_url, job_dir, show_progress=verbose)
+        dl, audio_cached = cache.get_or_download_audio(
+            job.youtube_url, job_dir, show_progress=verbose
+        )
         job.audio_path = str(dl.audio_path)
         job.video_title = dl.metadata.title
         job.video_description = dl.metadata.description
         store.save_job(job)
         if verbose:
-            _log(f"[{job_id}] Downloaded: {dl.audio_path.name} — {dl.metadata.title}")
+            source = "cache" if audio_cached else "download"
+            _log(f"[{job_id}] Audio ({source}): {dl.audio_path.name} — {dl.metadata.title}")
 
         job.status = JobStatus.transcribing
         store.save_job(job)
         if verbose:
             _log(f"[{job_id}] Transcribing (captions + whisper)...")
 
-        caption_list = captions.fetch_japanese_captions(job.youtube_url, job_dir)
+        caption_list, captions_cached = cache.get_or_fetch_captions(job.youtube_url, job_dir)
         whisper_result = None
+        whisper_cached = False
         run_whisper = settings.whisper_mode == "always"
         if settings.whisper_mode == "fallback_only":
             coverage = merger.caption_coverage_ratio(caption_list, None)
             run_whisper = coverage < 0.95
         if run_whisper or not caption_list:
-            whisper_result = transcriber.transcribe(dl.audio_path, job_dir)
+            whisper_result, whisper_cached = cache.get_or_transcribe(
+                dl.audio_path, job.youtube_url, job_dir
+            )
             unload_whisper_model()
         if verbose:
             seg_count = len((whisper_result or {}).get("segments", []))
-            _log(f"[{job_id}] Captions: {len(caption_list or [])} cues, Whisper: {seg_count} segments")
+            cap_src = "cache" if captions_cached else "fetch"
+            wh_src = "cache" if whisper_cached else "run"
+            _log(
+                f"[{job_id}] Captions ({cap_src}): {len(caption_list or [])} cues, "
+                f"Whisper ({wh_src}): {seg_count} segments"
+            )
 
         job.status = JobStatus.segmenting
         store.save_job(job)
@@ -77,8 +89,11 @@ def run_job(job_id: str, *, verbose: bool = False) -> Job:
     except Exception as exc:
         job.status = JobStatus.failed
         job.error = str(exc)
+        tb = traceback.format_exc()
+        (job_dir / "error.log").write_text(tb, encoding="utf-8")
         if verbose:
             _log(f"[{job_id}] Failed: {exc}")
+            _log(f"[{job_id}] Traceback written to {job_dir / 'error.log'}")
     finally:
         store.save_job(job)
 

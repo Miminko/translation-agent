@@ -109,9 +109,20 @@ streamlit run app/streamlit_app.py
 ```
 
 Outputs are written to `data/jobs/<job_id>/`:
+
 - `output.txt` — aligned JA/EN blocks
 - `output.json` — machine-readable segments + flags
 - `output.ja.srt` / `output.en.srt` — subtitles
+
+**Artifact cache:** Re-running the same video URL reuses cached audio, captions, and Whisper output from `data/cache/` (skip download + transcribe). Disable with `USE_ARTIFACT_CACHE=false` in `.env`.
+
+**Transcription backend (`TRANSCRIPTION_BACKEND`):**
+
+- `mlx` (default, **Apple Silicon only**) — runs Whisper on the M-series GPU via `mlx-whisper`. Near-realtime; a 1-hour video transcribes in minutes. Model set by `MLX_WHISPER_MODEL` (default `mlx-community/whisper-large-v3-turbo`).
+- `local` — `faster-whisper` on CPU. Portable but slow for `large-v3` on long audio (many hours). Uses VAD to skip silence and all CPU cores. Model set by `LOCAL_WHISPER_MODEL` (`small`/`medium`/`large-v3-turbo`/`large-v3`).
+- `openai` — not implemented yet.
+
+Whisper progress is printed live to stderr (`whisper NN% (mm:ss / mm:ss)`) so a slow run is distinguishable from a hung one.
 
 SETTING UP & TESTING LOCAL MODELS:
 - I've opted for free local models since I'm cheap.

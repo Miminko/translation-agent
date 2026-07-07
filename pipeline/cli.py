@@ -40,6 +40,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"Job {job.id}: {job.status.value}")
     if job.error:
         print(f"Error: {job.error}")
+        error_log = store.job_dir(job.id) / "error.log"
+        if error_log.exists():
+            print(f"Details: {error_log}")
         return 1
     if job.status == JobStatus.completed:
         job_dir = store.job_dir(job.id)
@@ -57,6 +60,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"Title: {job.video_title}")
     if job.error:
         print(f"Error: {job.error}")
+        error_log = store.job_dir(args.job_id) / "error.log"
+        if error_log.exists():
+            print(f"Details: {error_log}")
     print(f"Segments: {len(job.segments)}")
     return 0
 
@@ -67,6 +73,9 @@ def cmd_watch(args: argparse.Namespace) -> int:
     print(f"Job {job.id}: {job.status.value}")
     if job.error:
         print(f"Error: {job.error}")
+        error_log = store.job_dir(job.id) / "error.log"
+        if error_log.exists():
+            print(f"Details: {error_log}")
         return 1
     return 0 if job.status == JobStatus.completed else 1
 
