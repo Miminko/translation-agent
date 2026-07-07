@@ -10,20 +10,30 @@ from config import settings
 from state.models import Job, JobStatus, Segment
 
 
-def _jobs_root() -> Path:
+def _jobs_root(*, create: bool = True) -> Path:
     root = settings.data_path / "jobs"
-    root.mkdir(parents=True, exist_ok=True)
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
     return root
 
 
+def _validate_job_id(job_id: str) -> str:
+    try:
+        parsed = uuid.UUID(job_id)
+    except ValueError as exc:
+        raise FileNotFoundError(f"Job not found: {job_id}") from exc
+    return str(parsed)
+
+
 def job_dir(job_id: str) -> Path:
-    path = _jobs_root() / job_id
+    path = _jobs_root() / _validate_job_id(job_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def _job_path(job_id: str) -> Path:
-    return job_dir(job_id) / "job.json"
+def _job_path(job_id: str, *, create_dir: bool = False) -> Path:
+    root = _jobs_root(create=create_dir)
+    return root / _validate_job_id(job_id) / "job.json"
 
 
 def create_job(youtube_url: str) -> Job:
@@ -43,7 +53,8 @@ def create_job(youtube_url: str) -> Job:
 
 def save_job(job: Job) -> None:
     job.updated_at = datetime.now(timezone.utc)
-    path = _job_path(job.id)
+    path = _job_path(job.id, create_dir=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(job.model_dump_json(indent=2), encoding="utf-8")
     tmp.replace(path)
@@ -65,7 +76,9 @@ def _entry_mtime(path: Path) -> float:
 
 def list_jobs() -> List[Job]:
     jobs: List[Job] = []
-    root = _jobs_root()
+    root = _jobs_root(create=False)
+    if not root.exists():
+        return jobs
     for entry in sorted(root.iterdir(), key=_entry_mtime, reverse=True):
         job_file = entry / "job.json"
         if job_file.is_file():
@@ -83,6 +96,18 @@ def find_job(job_id: str) -> Optional[Job]:
         return None
 
 
+def _validate_segments(segments: List[Segment]) -> None:
+    seen: set[int] = set()
+    duplicates: set[int] = set()
+    for segment in segments:
+        if segment.id in seen:
+            duplicates.add(segment.id)
+        seen.add(segment.id)
+    if duplicates:
+        duplicate_list = ", ".join(str(segment_id) for segment_id in sorted(duplicates))
+        raise ValueError(f"Duplicate segment id(s): {duplicate_list}")
+
+
 def segments_review_path(job_id: str) -> Path:
     return job_dir(job_id) / "segments.json"
 
@@ -94,6 +119,7 @@ def write_review_segments(job_id: str, segments: List[Segment]) -> Path:
     duplicates, or edit `japanese` to fix transcription errors, then run the
     translate phase — it reads this file back.
     """
+    _validate_segments(segments)
     path = segments_review_path(job_id)
     payload = [
         {
@@ -107,7 +133,9 @@ def write_review_segments(job_id: str, segments: List[Segment]) -> Path:
         }
         for segment in segments
     ]
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
     return path
 
 
@@ -120,4 +148,5 @@ def load_review_segments(job_id: str) -> Optional[List[Segment]]:
     segments: List[Segment] = []
     for entry in raw:
         segments.append(Segment.model_validate(entry))
+    _validate_segments(segments)
     return segments

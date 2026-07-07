@@ -21,6 +21,13 @@ def test_load_job_missing_raises(tmp_data_dir) -> None:
         store.load_job("nonexistent-id")
 
 
+def test_load_job_invalid_id_does_not_create_directory(tmp_data_dir) -> None:
+    with pytest.raises(FileNotFoundError):
+        store.load_job("../../outside")
+
+    assert not (tmp_data_dir / "jobs").exists()
+
+
 def test_save_job_updates_timestamp(tmp_data_dir) -> None:
     job = store.create_job("https://vimeo.com/1")
     original_updated = job.updated_at
@@ -61,6 +68,17 @@ def test_review_segments_roundtrip(tmp_data_dir) -> None:
     assert len(loaded) == 1
     assert loaded[0].japanese == "編集前"
     assert loaded[0].source == SegmentSource.caption
+
+
+def test_review_segments_reject_duplicate_ids(tmp_data_dir) -> None:
+    job = store.create_job("https://vimeo.com/review")
+    segments = [
+        Segment(id=1, start=0.0, end=1.0, japanese="一つ目"),
+        Segment(id=1, start=1.0, end=2.0, japanese="二つ目"),
+    ]
+
+    with pytest.raises(ValueError, match="Duplicate segment"):
+        store.write_review_segments(job.id, segments)
 
 
 def test_load_review_segments_missing(tmp_data_dir) -> None:

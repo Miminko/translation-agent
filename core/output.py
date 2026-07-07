@@ -17,10 +17,10 @@ class OutputPaths:
 
 
 def _format_timestamp(seconds: float) -> str:
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int(round((seconds - int(seconds)) * 1000))
+    total_millis = max(0, int(round(seconds * 1000)))
+    total_seconds, millis = divmod(total_millis, 1000)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
@@ -29,6 +29,12 @@ def _format_display_timestamp(seconds: float) -> str:
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _write_text_atomic(path: Path, content: str) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(path)
 
 
 def _write_srt(path: Path, segments: List[Segment], field: str) -> None:
@@ -45,7 +51,7 @@ def _write_srt(path: Path, segments: List[Segment], field: str) -> None:
         lines.append(str(text).strip())
         lines.append("")
         index += 1
-    path.write_text("\n".join(lines), encoding="utf-8")
+    _write_text_atomic(path, "\n".join(lines))
 
 
 def write_output(job: Job, output_dir: Path) -> OutputPaths:
@@ -67,7 +73,7 @@ def write_output(job: Job, output_dir: Path) -> OutputPaths:
         txt_lines.append("")
 
     txt_path = output_dir / "output.txt"
-    txt_path.write_text("\n".join(txt_lines), encoding="utf-8")
+    _write_text_atomic(txt_path, "\n".join(txt_lines))
 
     payload = {
         "job_id": job.id,
@@ -77,7 +83,7 @@ def write_output(job: Job, output_dir: Path) -> OutputPaths:
         "segments": [segment.model_dump() for segment in job.segments],
     }
     json_path = output_dir / "output.json"
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_text_atomic(json_path, json.dumps(payload, ensure_ascii=False, indent=2))
 
     ja_srt = output_dir / "output.ja.srt"
     en_srt = output_dir / "output.en.srt"

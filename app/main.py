@@ -142,7 +142,11 @@ def start_translation(
     """Run phase 2: translate reviewed segments + optional critic/repair loop."""
     job = _get_job_or_404(job_id)
     _ensure_not_running(job)
-    if not job.segments and store.load_review_segments(job_id) is None:
+    try:
+        reviewed = store.load_review_segments(job.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not job.segments and not reviewed:
         raise HTTPException(
             status_code=400,
             detail="No segments to translate. Run POST /jobs/{job_id}/transcribe first.",
@@ -164,8 +168,8 @@ def start_full_pipeline(job_id: str, background_tasks: BackgroundTasks) -> dict:
 @app.get("/jobs/{job_id}/segments")
 def get_review_segments(job_id: str) -> FileResponse:
     """Download segments.json for review before translation."""
-    _get_job_or_404(job_id)
-    path = store.segments_review_path(job_id)
+    job = _get_job_or_404(job_id)
+    path = store.segments_review_path(job.id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Segments not ready. Run transcribe first.")
     return FileResponse(path, media_type="application/json", filename="segments.json")
@@ -175,17 +179,23 @@ def get_review_segments(job_id: str) -> FileResponse:
 def update_review_segments(job_id: str, segments: List[SegmentReview]) -> dict:
     """Upload edited segments.json before running translate."""
     job = _get_job_or_404(job_id)
+    _ensure_not_running(job)
+    if not segments:
+        raise HTTPException(status_code=400, detail="At least one segment is required")
     parsed = [Segment.model_validate(segment.model_dump()) for segment in segments]
-    store.write_review_segments(job_id, parsed)
+    try:
+        store.write_review_segments(job.id, parsed)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     job.segments = parsed
     store.save_job(job)
-    return {"job_id": job_id, "segments": len(parsed), "status": job.status.value}
+    return {"job_id": job.id, "segments": len(parsed), "status": job.status.value}
 
 
 @app.get("/jobs/{job_id}/output")
 def get_output(job_id: str) -> FileResponse:
-    _get_job_or_404(job_id)
-    path = store.job_dir(job_id) / "output.json"
+    job = _get_job_or_404(job_id)
+    path = store.job_dir(job.id) / "output.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Output not ready")
     return FileResponse(path, media_type="application/json", filename="output.json")
@@ -193,9 +203,9 @@ def get_output(job_id: str) -> FileResponse:
 
 @app.get("/jobs/{job_id}/output.srt")
 def get_output_srt(job_id: str, lang: str = Query("en", pattern="^(ja|en)$")) -> FileResponse:
-    _get_job_or_404(job_id)
+    job = _get_job_or_404(job_id)
     suffix = "ja" if lang == "ja" else "en"
-    path = store.job_dir(job_id) / f"output.{suffix}.srt"
+    path = store.job_dir(job.id) / f"output.{suffix}.srt"
     if not path.exists():
         raise HTTPException(status_code=404, detail="SRT not ready")
     return FileResponse(path, media_type="application/x-subrip", filename=path.name)
@@ -203,8 +213,8 @@ def get_output_srt(job_id: str, lang: str = Query("en", pattern="^(ja|en)$")) ->
 
 @app.get("/jobs/{job_id}/refinement_log")
 def get_refinement_log(job_id: str) -> FileResponse:
-    _get_job_or_404(job_id)
-    path = store.job_dir(job_id) / "refinement_log.json"
+    job = _get_job_or_404(job_id)
+    path = store.job_dir(job.id) / "refinement_log.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Refinement log not found")
     return FileResponse(path, media_type="application/json", filename="refinement_log.json")

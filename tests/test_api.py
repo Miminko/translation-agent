@@ -72,6 +72,64 @@ def test_update_review_segments(client: TestClient, tmp_data_dir) -> None:
     assert loaded[0].japanese == "編集済み"
 
 
+def test_update_review_segments_rejects_empty_list(
+    client: TestClient, tmp_data_dir
+) -> None:
+    job = store.create_job("https://vimeo.com/6031")
+
+    response = client.put(f"/jobs/{job.id}/segments", json=[])
+
+    assert response.status_code == 400
+    assert "At least one segment" in response.json()["detail"]
+
+
+def test_update_review_segments_rejects_duplicate_ids(
+    client: TestClient, tmp_data_dir
+) -> None:
+    job = store.create_job("https://vimeo.com/6032")
+    payload = [
+        {
+            "id": 1,
+            "start": 0.0,
+            "end": 1.0,
+            "japanese": "一つ目",
+        },
+        {
+            "id": 1,
+            "start": 1.0,
+            "end": 2.0,
+            "japanese": "二つ目",
+        },
+    ]
+
+    response = client.put(f"/jobs/{job.id}/segments", json=payload)
+
+    assert response.status_code == 400
+    assert "Duplicate segment" in response.json()["detail"]
+
+
+def test_update_review_segments_rejects_running_job(
+    client: TestClient, tmp_data_dir
+) -> None:
+    job = store.create_job("https://vimeo.com/6033")
+    job.status = JobStatus.translating
+    store.save_job(job)
+
+    response = client.put(
+        f"/jobs/{job.id}/segments",
+        json=[
+            {
+                "id": 1,
+                "start": 0.0,
+                "end": 1.0,
+                "japanese": "編集中",
+            }
+        ],
+    )
+
+    assert response.status_code == 409
+
+
 def test_get_review_segments_when_ready(client: TestClient, tmp_data_dir) -> None:
     job = store.create_job("https://vimeo.com/604")
     store.write_review_segments(
