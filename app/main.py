@@ -169,7 +169,7 @@ def start_full_pipeline(job_id: str, background_tasks: BackgroundTasks) -> dict:
 def get_review_segments(job_id: str) -> FileResponse:
     """Download segments.json for review before translation."""
     job = _get_job_or_404(job_id)
-    path = store.segments_review_path(job.id)
+    path = store.segments_review_path(job.id, create_dir=False)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Segments not ready. Run transcribe first.")
     return FileResponse(path, media_type="application/json", filename="segments.json")
@@ -182,8 +182,8 @@ def update_review_segments(job_id: str, segments: List[SegmentReview]) -> dict:
     _ensure_not_running(job)
     if not segments:
         raise HTTPException(status_code=400, detail="At least one segment is required")
-    parsed = [Segment.model_validate(segment.model_dump()) for segment in segments]
     try:
+        parsed = [Segment.model_validate(segment.model_dump()) for segment in segments]
         store.write_review_segments(job.id, parsed)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

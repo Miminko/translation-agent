@@ -108,8 +108,11 @@ def _validate_segments(segments: List[Segment]) -> None:
         raise ValueError(f"Duplicate segment id(s): {duplicate_list}")
 
 
-def segments_review_path(job_id: str) -> Path:
-    return job_dir(job_id) / "segments.json"
+def segments_review_path(job_id: str, *, create_dir: bool = True) -> Path:
+    if create_dir:
+        return job_dir(job_id) / "segments.json"
+    root = _jobs_root(create=False)
+    return root / _validate_job_id(job_id) / "segments.json"
 
 
 def write_review_segments(job_id: str, segments: List[Segment]) -> Path:
@@ -141,7 +144,7 @@ def write_review_segments(job_id: str, segments: List[Segment]) -> Path:
 
 def load_review_segments(job_id: str) -> Optional[List[Segment]]:
     """Load reviewed/edited segments from segments.json if it exists."""
-    path = segments_review_path(job_id)
+    path = segments_review_path(job_id, create_dir=False)
     if not path.exists():
         return None
     raw = json.loads(path.read_text(encoding="utf-8"))

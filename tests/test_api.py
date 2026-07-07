@@ -108,6 +108,25 @@ def test_update_review_segments_rejects_duplicate_ids(
     assert "Duplicate segment" in response.json()["detail"]
 
 
+def test_update_review_segments_rejects_invalid_source(
+    client: TestClient, tmp_data_dir
+) -> None:
+    job = store.create_job("https://vimeo.com/6034")
+    payload = [
+        {
+            "id": 1,
+            "start": 0.0,
+            "end": 1.0,
+            "japanese": "一つ目",
+            "source": "invalid",
+        },
+    ]
+
+    response = client.put(f"/jobs/{job.id}/segments", json=payload)
+
+    assert response.status_code == 400
+
+
 def test_update_review_segments_rejects_running_job(
     client: TestClient, tmp_data_dir
 ) -> None:

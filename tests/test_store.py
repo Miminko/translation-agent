@@ -84,3 +84,10 @@ def test_review_segments_reject_duplicate_ids(tmp_data_dir) -> None:
 def test_load_review_segments_missing(tmp_data_dir) -> None:
     job = store.create_job("https://vimeo.com/nosegments")
     assert store.load_review_segments(job.id) is None
+
+
+def test_load_review_segments_missing_valid_id_does_not_create_directory(tmp_data_dir) -> None:
+    job_id = "00000000-0000-0000-0000-000000000001"
+
+    assert store.load_review_segments(job_id) is None
+    assert not (tmp_data_dir / "jobs" / job_id).exists()
