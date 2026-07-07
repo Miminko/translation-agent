@@ -52,6 +52,14 @@ python scripts/smoke_test.py  # verify config + Ollama
 
 ## Running jobs
 
+### Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest                    # run unit tests
+pytest --cov=. --cov-report=term-missing   # with coverage
+```
+
 ### One-shot (both phases, no review pause)
 
 ```bash
