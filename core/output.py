@@ -33,7 +33,8 @@ def _format_display_timestamp(seconds: float) -> str:
 
 def _write_srt(path: Path, segments: List[Segment], field: str) -> None:
     lines: List[str] = []
-    for index, segment in enumerate(segments, start=1):
+    index = 1
+    for segment in segments:
         text = getattr(segment, field) or ""
         if not str(text).strip():
             continue
@@ -43,6 +44,7 @@ def _write_srt(path: Path, segments: List[Segment], field: str) -> None:
         )
         lines.append(str(text).strip())
         lines.append("")
+        index += 1
     path.write_text("\n".join(lines), encoding="utf-8")
 
 

@@ -137,8 +137,10 @@ def translate_segments(
                 updated[index] = updated[index].model_copy(update={"english": english})
 
         done_segments += len(window)
+        # Build context from the freshly-translated versions in `updated`, not
+        # from the original `window` objects whose `english` field is stale.
         previous_context = "\n".join(
-            f"JA: {segment.japanese}\nEN: {segment.english or ''}"
+            f"JA: {segment.japanese}\nEN: {updated[segment_by_id[segment.id]].english or ''}"
             for segment in window[-2:]
         )
 

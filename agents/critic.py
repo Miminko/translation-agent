@@ -120,6 +120,7 @@ def critique_segments(
             critique_windows.append(window)
 
     total_windows = len(critique_windows)
+    total_segments = sum(len(w) for w in critique_windows)
     done_segments = 0
     repair_ids: Set[int] = set()
     start = time.time()
@@ -153,7 +154,7 @@ def critique_segments(
 
         done_segments += len(window)
         if on_progress:
-            on_progress(updated, done_segments, total_windows)
+            on_progress(updated, done_segments, total_segments)
 
         if verbose:
             elapsed = time.time() - start

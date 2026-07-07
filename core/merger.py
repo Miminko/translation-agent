@@ -95,10 +95,6 @@ def reconcile(
     if not whisper_utts:
         return caption_utts
 
-    duration = max(
-        max((u.end for u in caption_utts), default=0.0),
-        max((u.end for u in whisper_utts), default=0.0),
-    )
     merged: List[TimedUtterance] = []
 
     for caption in caption_utts:

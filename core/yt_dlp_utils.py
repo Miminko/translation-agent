@@ -4,15 +4,29 @@ import re
 import shutil
 import subprocess
 from typing import List
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from config import settings
 
 _VIMEO_URL = re.compile(r"^https?://(?:www\.)?vimeo\.com/(\d+)(?:/([a-f0-9]+))?", re.I)
 
+# Query parameters that carry the video identity and must be preserved.
+_IDENTITY_PARAMS: dict[str, set[str]] = {
+    "youtube.com": {"v"},
+    "youtu.be": set(),
+    "vimeo.com": set(),
+}
+
 
 def normalize_video_url(url: str) -> str:
-    """Strip tracking query params; keep Vimeo unlisted hash in path."""
+    """Strip tracking query params while preserving video identity params.
+
+    - Vimeo: canonical numeric path, keep unlisted hash, drop query string.
+    - YouTube watch URLs: keep the ``v`` parameter; drop everything else
+      (``t``, ``si``, ``list``, UTM params, etc.).
+    - youtu.be short links: identity is in the path, drop all query params.
+    - Everything else: drop query string, fragment, and credentials.
+    """
     url = url.strip()
     match = _VIMEO_URL.match(url)
     if match:
@@ -20,10 +34,23 @@ def normalize_video_url(url: str) -> str:
         if unlisted_hash:
             return f"https://vimeo.com/{video_id}/{unlisted_hash}"
         return f"https://vimeo.com/{video_id}"
+
     parsed = urlparse(url)
-    if parsed.scheme and parsed.netloc:
-        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
-    return url
+    if not (parsed.scheme and parsed.netloc):
+        return url
+
+    # Determine which query params to keep based on hostname.
+    hostname = parsed.netloc.lower().lstrip("www.")
+    keep_params = _IDENTITY_PARAMS.get(hostname, set())
+
+    if keep_params and parsed.query:
+        qs = parse_qs(parsed.query, keep_blank_values=False)
+        filtered = {k: v for k, v in qs.items() if k in keep_params}
+        query = urlencode({k: v[0] for k, v in filtered.items()}) if filtered else ""
+    else:
+        query = ""
+
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", query, ""))
 
 
 def _require_tool(name: str) -> None:

@@ -32,10 +32,11 @@ def run_transcription(job_id: str, *, verbose: bool = False) -> Job:
     Writes an editable `segments.json` and leaves the job in the `transcribed`
     state so the transcript can be reviewed/edited before translation.
     """
-    job = store.load_job(job_id)
+    job: Optional[Job] = None
     job_dir = store.job_dir(job_id)
 
     try:
+        job = store.load_job(job_id)
         job.status = JobStatus.downloading
         store.save_job(job)
         if verbose:
@@ -95,9 +96,16 @@ def run_transcription(job_id: str, *, verbose: bool = False) -> Job:
             _log(f"[{job_id}] Review/edit: {review_path}")
             _log(f"[{job_id}] Then run: python -m pipeline.cli translate {job_id}")
     except Exception as exc:
+        if job is None:
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / "error.log").write_text(traceback.format_exc(), encoding="utf-8")
+            if verbose:
+                _log(f"[{job_id}] Failed before job could be loaded: {exc}")
+            raise
         _record_failure(job, job_dir, exc, verbose=verbose)
     finally:
-        store.save_job(job)
+        if job is not None:
+            store.save_job(job)
 
     return job
 
@@ -106,10 +114,11 @@ def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool
     """Phase 2: translate reviewed segments, optional critic/repair loop, write outputs."""
     from agents import refinement as refinement_agent
 
-    job = store.load_job(job_id)
+    job: Optional[Job] = None
     job_dir = store.job_dir(job_id)
 
     try:
+        job = store.load_job(job_id)
         reviewed = store.load_review_segments(job_id)
         if reviewed is not None:
             job.segments = reviewed
@@ -143,6 +152,11 @@ def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool
             job.segments = segments
             store.save_job(job)
 
+        active_model = (
+            settings.ollama_model
+            if settings.translation_backend == "ollama"
+            else settings.translation_model
+        )
         job.segments = translation_agent.translate_segments(
             job.segments,
             job,
@@ -150,7 +164,7 @@ def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool
             on_progress=_on_translation_progress,
             cache=translation_cache,
             cache_save=_save_cache,
-            cache_model=settings.ollama_model,
+            cache_model=active_model,
         )
 
         use_refinement = settings.refinement_enabled if refine is None else refine
@@ -195,9 +209,16 @@ def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool
         if verbose:
             _log(f"[{job_id}] Completed. Output: {job_dir / 'output.txt'}")
     except Exception as exc:
+        if job is None:
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / "error.log").write_text(traceback.format_exc(), encoding="utf-8")
+            if verbose:
+                _log(f"[{job_id}] Failed before job could be loaded: {exc}")
+            raise
         _record_failure(job, job_dir, exc, verbose=verbose)
     finally:
-        store.save_job(job)
+        if job is not None:
+            store.save_job(job)
 
     return job
 

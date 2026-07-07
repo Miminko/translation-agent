@@ -4,9 +4,22 @@ from core.cache import translation_key, url_cache_dir
 from core.yt_dlp_utils import normalize_video_url
 
 
-def test_normalize_video_url_strips_query_params() -> None:
-    url = "https://www.youtube.com/watch?v=abc123&t=30"
-    assert normalize_video_url(url) == "https://www.youtube.com/watch"
+def test_normalize_video_url_youtube_preserves_video_id() -> None:
+    """The v= param is the video identity and must be kept; tracking params dropped."""
+    url = "https://www.youtube.com/watch?v=abc123&t=30&si=xyz&list=PL1"
+    assert normalize_video_url(url) == "https://www.youtube.com/watch?v=abc123"
+
+
+def test_normalize_video_url_youtube_short_link() -> None:
+    """youtu.be short links carry identity in the path; drop all query params."""
+    assert normalize_video_url("https://youtu.be/abc123?si=xyz") == "https://youtu.be/abc123"
+
+
+def test_normalize_video_url_different_videos_differ() -> None:
+    """Two different YouTube videos must not map to the same cache key."""
+    url1 = normalize_video_url("https://www.youtube.com/watch?v=aaa111")
+    url2 = normalize_video_url("https://www.youtube.com/watch?v=bbb222")
+    assert url1 != url2
 
 
 def test_normalize_video_url_vimeo_canonical() -> None:

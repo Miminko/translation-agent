@@ -70,9 +70,14 @@ def format_job_progress(job: Job, *, elapsed: Optional[float] = None) -> str:
     extras: list[str] = []
 
     if job.status == JobStatus.downloading:
-        downloaded = _partial_download_bytes(store.job_dir(job.id))
-        if downloaded:
-            extras.append(_format_bytes(downloaded))
+        # Use the settings path directly to avoid store.job_dir() creating the
+        # directory as a side effect inside this read-only formatting function.
+        from config import settings
+        job_dir_path = settings.data_path / "jobs" / job.id
+        if job_dir_path.is_dir():
+            downloaded = _partial_download_bytes(job_dir_path)
+            if downloaded:
+                extras.append(_format_bytes(downloaded))
 
     if job.status == JobStatus.translating and job.segments:
         total = len(job.segments)
@@ -139,12 +144,14 @@ def watch_job(
 def run_in_background(
     target: Callable[[], Job],
     done_event: Optional[threading.Event] = None,
-) -> tuple[threading.Thread, dict[str, Job]]:
-    result: dict[str, Job] = {}
+) -> tuple[threading.Thread, dict]:
+    result: dict = {}
 
     def worker() -> None:
         try:
             result["job"] = target()
+        except Exception as exc:
+            result["exc"] = exc
         finally:
             if done_event is not None:
                 done_event.set()
@@ -164,4 +171,6 @@ def run_with_progress(job_runner: Callable[[], Job], job_id: str) -> Job:
     thread, result = run_in_background(job_runner, done_event=done)
     watch_job(job_id, stop_event=done)
     thread.join()
+    if "exc" in result:
+        raise result["exc"]
     return result["job"]
