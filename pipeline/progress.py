@@ -21,6 +21,7 @@ STATUS_PROGRESS: dict[JobStatus, tuple[int, str]] = {
     JobStatus.segmenting: (55, "segmenting"),
     JobStatus.transcribed: (60, "transcribed (awaiting review)"),
     JobStatus.translating: (75, "translating"),
+    JobStatus.refining: (90, "refining"),
     JobStatus.completed: (100, "completed"),
     JobStatus.failed: (100, "failed"),
 }
@@ -76,10 +77,15 @@ def format_job_progress(job: Job, *, elapsed: Optional[float] = None) -> str:
     if job.status == JobStatus.translating and job.segments:
         total = len(job.segments)
         translated = sum(1 for segment in job.segments if segment.english)
-        # Scale the translating stage across 75-99% based on segments done.
         start_pct, _ = STATUS_PROGRESS[JobStatus.translating]
-        percent = start_pct + int((translated / total) * (99 - start_pct)) if total else start_pct
+        percent = start_pct + int((translated / total) * (89 - start_pct)) if total else start_pct
         extras.append(f"{translated}/{total} translated")
+    elif job.status == JobStatus.refining and job.segments:
+        total = len(job.segments)
+        reviewed = sum(1 for segment in job.segments if segment.translation_confidence is not None)
+        start_pct, _ = STATUS_PROGRESS[JobStatus.refining]
+        percent = start_pct + int((reviewed / total) * (99 - start_pct)) if total else start_pct
+        extras.append(f"{reviewed}/{total} critiqued")
     elif job.status == JobStatus.segmenting and job.segments:
         extras.append(f"{len(job.segments)} segments")
 

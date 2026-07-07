@@ -20,7 +20,11 @@ class Segment(BaseModel):
     japanese: str
     english: Optional[str] = None
     source: SegmentSource = SegmentSource.merged
-    confidence: Optional[float] = None
+    confidence: Optional[float] = None          # transcription confidence (Whisper)
+    translation_confidence: Optional[float] = None  # critic score 0-1
+    critic_issues: List[str] = Field(default_factory=list)
+    critic_suggestion: Optional[str] = None     # critic-proposed fix (input to repair)
+    revised: bool = False                       # True if repair agent updated english
     flags: List[str] = Field(default_factory=list)
 
 
@@ -31,6 +35,7 @@ class JobStatus(str, Enum):
     segmenting = "segmenting"
     transcribed = "transcribed"  # paused after transcription for manual review
     translating = "translating"
+    refining = "refining"        # critic/repair loop after baseline translation
     completed = "completed"
     failed = "failed"
 

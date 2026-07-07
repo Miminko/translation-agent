@@ -25,6 +25,7 @@ ACTIVE_STATUSES = {
     JobStatus.transcribing,
     JobStatus.segmenting,
     JobStatus.translating,
+    JobStatus.refining,
 }
 
 
@@ -139,6 +140,8 @@ def _render_results(job) -> None:
                 "end": _format_time(segment.end),
                 "japanese": segment.japanese,
                 "english": segment.english or "",
+                "translation_confidence": segment.translation_confidence,
+                "critic_issues": ", ".join(segment.critic_issues),
                 "confidence": segment.confidence,
                 "flags": ", ".join(segment.flags),
                 "source": segment.source.value,
@@ -256,6 +259,7 @@ def _progress_percent(job) -> int:
         JobStatus.segmenting: 55,
         JobStatus.transcribed: 60,
         JobStatus.translating: 75,
+        JobStatus.refining: 90,
         JobStatus.completed: 100,
         JobStatus.failed: 100,
     }

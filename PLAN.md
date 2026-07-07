@@ -62,30 +62,30 @@ Deterministic pipeline with human-in-the-loop review between transcription and t
 - **`length_anomaly` false positives** — Japanese is compact; English is often >2.5× longer even when correct.
 - **No speaker diarization** — all speech treated as one stream.
 - **No visual context** — audio-only; can't resolve references to slides/images.
-- **API doesn't expose two-phase endpoints yet** — CLI and Streamlit do; FastAPI still runs full pipeline.
-- **Critic/repair not wired** — stubs exist at `agents/critic.py`, `agents/repair.py`.
+- **API two-phase endpoints** — `POST /jobs/transcribe`, `/jobs/{id}/translate`, `GET/PUT /segments`
+- **Critic/repair wired** — LangGraph loop after translation (`agents/refinement.py`)
 
 ---
 
-## Phase 2 — Agentic refinement loop ⏳ (planned)
+## Phase 2 — Agentic refinement loop ✅ (implemented)
 
-Add iterative quality improvement after baseline translation.
+Iterative quality improvement after baseline translation via LangGraph.
 
 ### Agents
 
 | Agent | Role | Status |
 |-------|------|--------|
 | **Translator** | JA→EN in paragraph windows | ✅ Done |
-| **Critic** | Compare JA/EN; flag issues, score confidence, suggest corrections | Stub |
-| **Repair** | Re-translate flagged segments with critic feedback | Stub |
+| **Critic** | Compare JA/EN; score confidence, flag issues, suggest fixes | ✅ Done |
+| **Repair** | Re-translate flagged segments with critic feedback | ✅ Done |
 
-Loop: `translate → critique → repair → re-check` until confidence threshold met or max iterations.
+Loop (`agents/refinement.py`): `critique → repair → re-critique` until confidence threshold met or `REFINEMENT_MAX_ITERATIONS` reached.
 
-### Framework
+Disable with `REFINEMENT_ENABLED=false` or `--no-refinement` on CLI.
 
-- **LangGraph** for agent orchestration, conditional edges (e.g. `if confidence < 0.7: rerun_translation()`)
-- State tracking: segment revisions, critic feedback history
-- Evaluation metrics: edit distance after critique, confidence distributions, correction rate
+### Still planned (Phase 2+)
+
+- Evaluation metrics dashboard (edit distance, correction rate)
 
 ---
 

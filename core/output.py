@@ -56,6 +56,10 @@ def write_output(job: Job, output_dir: Path) -> OutputPaths:
         txt_lines.append(f"[{start} - {end}]")
         txt_lines.append(f"japanese: {segment.japanese}")
         txt_lines.append(f"english: {segment.english or ''}")
+        if segment.translation_confidence is not None:
+            txt_lines.append(f"translation_confidence: {segment.translation_confidence:.2f}")
+        if segment.critic_issues:
+            txt_lines.append(f"critic_issues: {', '.join(segment.critic_issues)}")
         if segment.flags:
             txt_lines.append(f"flags: {', '.join(segment.flags)}")
         txt_lines.append("")
