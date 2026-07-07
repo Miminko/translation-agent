@@ -31,25 +31,26 @@ def _print_error_details(job) -> None:
 def cmd_run(args: argparse.Namespace) -> int:
     verbose = args.verbose
     show_progress = args.progress and not verbose
+    refine = not args.no_refinement
 
     if args.job_id:
         job_id = args.job_id
         if show_progress:
             job = run_with_progress(
-                lambda: run_job(job_id, verbose=verbose),
+                lambda: run_job(job_id, verbose=verbose, refine=refine),
                 job_id,
             )
         else:
-            job = run_job(job_id, verbose=verbose)
+            job = run_job(job_id, verbose=verbose, refine=refine)
     else:
         if show_progress:
             job = store.create_job(args.url)
             job = run_with_progress(
-                lambda: run_job(job.id, verbose=verbose),
+                lambda: run_job(job.id, verbose=verbose, refine=refine),
                 job.id,
             )
         else:
-            job = create_and_run(args.url, verbose=verbose)
+            job = create_and_run(args.url, verbose=verbose, refine=refine)
 
     print(f"Job {job.id}: {job.status.value}")
     if job.error:
@@ -94,8 +95,9 @@ def cmd_translate(args: argparse.Namespace) -> int:
     verbose = args.verbose
     show_progress = args.progress and not verbose
     job_id = args.job_id
+    refine = not args.no_refinement
 
-    runner = lambda: run_translation(job_id, verbose=verbose)
+    runner = lambda: run_translation(job_id, verbose=verbose, refine=refine)
     job = run_with_progress(runner, job_id) if show_progress else runner()
 
     print(f"Job {job.id}: {job.status.value}")
@@ -160,6 +162,11 @@ def main() -> int:
         default=True,
         help="Show live progress bar while the job runs (default: on)",
     )
+    run_parser.add_argument(
+        "--no-refinement",
+        action="store_true",
+        help="Skip critic/repair loop after translation (faster)",
+    )
     run_parser.set_defaults(func=cmd_run)
 
     tx_parser = subparsers.add_parser(
@@ -190,6 +197,11 @@ def main() -> int:
     tr_parser.add_argument(
         "--progress", action=argparse.BooleanOptionalAction, default=True,
         help="Show live progress bar while the job runs (default: on)",
+    )
+    tr_parser.add_argument(
+        "--no-refinement",
+        action="store_true",
+        help="Skip critic/repair loop after translation (faster)",
     )
     tr_parser.set_defaults(func=cmd_translate)
 

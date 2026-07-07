@@ -13,12 +13,12 @@ Paste a video URL, get time-aligned Japanese transcription, review/edit it, then
 | Segmentation | ✅ | Sentence boundaries + paragraph windows |
 | **Manual review pause** | ✅ | Edit `segments.json` before translating |
 | Translation | ✅ | Ollama, paragraph-window batches, resumable cache |
-| QA flags | ✅ | `low_confidence`, `length_anomaly`, etc. |
+| **Critic / Repair loop** | ✅ | LangGraph: critique → repair → re-check (configurable) |
+| QA flags | ✅ | Heuristic + critic scores (`low_translation_confidence`, etc.) |
 | Outputs | ✅ | `output.txt`, `output.json`, `.srt` files |
 | CLI (run / transcribe / translate) | ✅ | Progress bar + verbose mode |
 | Streamlit UI | ✅ | Two-phase buttons + in-browser editor |
 | FastAPI | ✅ | Basic job API |
-| Critic / Repair agents | ⏳ | Stubs only — see [PLAN.md](PLAN.md) |
 
 ## Pipeline
 
@@ -29,11 +29,12 @@ Video URL
   → merge + segment
   → [PAUSE] status = transcribed — review segments.json
   → translate windows via Ollama (cached per window)
+  → critic/repair loop (LangGraph, optional)
   → QA flags
   → output.txt / output.json / output.ja.srt / output.en.srt
 ```
 
-Job statuses: `pending` → `downloading` → `transcribing` → `segmenting` → **`transcribed`** (review) → `translating` → `completed` | `failed`
+Job statuses: `pending` → `downloading` → `transcribing` → `segmenting` → **`transcribed`** (review) → `translating` → **`refining`** → `completed` | `failed`
 
 ## Setup
 
@@ -68,8 +69,9 @@ python -m pipeline.cli transcribe "URL"
 
 # Review: edit segments.json — delete duplicates, fix japanese text
 
-# Phase 2 — translate reviewed segments + write outputs
+# Phase 2 — translate reviewed segments + critic/repair + write outputs
 python -m pipeline.cli translate <job_id>
+python -m pipeline.cli translate <job_id> --no-refinement   # skip critic/repair (faster)
 ```
 
 Re-run an existing job:
@@ -116,6 +118,7 @@ Written to `data/jobs/<job_id>/`:
 | `output.json` | After translate | Machine-readable segments + metadata |
 | `output.ja.srt` | After translate | Japanese subtitles (video players, editors) |
 | `output.en.srt` | After translate | English subtitles |
+| `refinement_log.json` | After translate (if refinement on) | Critic/repair stats |
 | `error.log` | On failure | Full Python traceback |
 | `whisper_raw.json` | After transcribe | Raw Whisper output |
 | `audio.wav` | After download | Extracted audio |
@@ -124,8 +127,11 @@ Written to `data/jobs/<job_id>/`:
 
 | Flag | Meaning |
 |------|---------|
-| `low_confidence` | Whisper confidence < 0.7 on this segment |
-| `length_anomaly` | English is >2.5× longer than Japanese (possible over-translation) |
+| `low_confidence` | Whisper transcription confidence < 0.7 |
+| `low_translation_confidence` | Critic translation score < 0.7 |
+| `critic_flagged` | Critic flagged for repair |
+| `critic_repaired` | Repair agent updated this segment |
+| `length_anomaly` | English >2.5× longer than Japanese (heuristic) |
 | `empty_translation` | English field is blank |
 | `very_short` | Japanese text under 2 characters |
 
@@ -142,6 +148,9 @@ Flags are review hints, not automatic errors. `length_anomaly` fires often on no
 | `OLLAMA_MODEL` | `qwen2.5:14b` | Translation model (`qwen2.5:7b` for 8GB RAM) |
 | `WHISPER_MODE` | `always` | `always` \| `fallback_only` (skip Whisper if captions cover ≥95%) |
 | `USE_ARTIFACT_CACHE` | `true` | Reuse audio/captions/whisper/translations per URL |
+| `REFINEMENT_ENABLED` | `true` | Run critic/repair loop after translation |
+| `REFINEMENT_CONFIDENCE_THRESHOLD` | `0.7` | Re-translate segments with critic score below this |
+| `REFINEMENT_MAX_ITERATIONS` | `2` | Max critique→repair cycles |
 | `YTDLP_COOKIES_FROM_BROWSER` | — | For login-required Vimeo/YouTube (`chrome`, `safari`, etc.) |
 
 ## Artifact cache
@@ -167,7 +176,7 @@ Disable with `USE_ARTIFACT_CACHE=false`.
 
 ```
 translation-agent/
-├── agents/           # translator (done), critic/repair (stubs)
+├── agents/           # translator, critic, repair, refinement (LangGraph)
 ├── app/              # FastAPI + Streamlit
 ├── core/             # downloader, captions, transcriber, merger, segmenter, qa, output, cache
 ├── pipeline/         # orchestrator, cli, progress

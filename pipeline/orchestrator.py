@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import time
 import traceback
+from typing import Optional
 
 from config import settings
 from core import cache, merger, output, qa, segmenter
@@ -101,8 +102,10 @@ def run_transcription(job_id: str, *, verbose: bool = False) -> Job:
     return job
 
 
-def run_translation(job_id: str, *, verbose: bool = False) -> Job:
-    """Phase 2: translate reviewed segments, run QA, and write outputs."""
+def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:
+    """Phase 2: translate reviewed segments, optional critic/repair loop, write outputs."""
+    from agents import refinement as refinement_agent
+
     job = store.load_job(job_id)
     job_dir = store.job_dir(job_id)
 
@@ -149,6 +152,38 @@ def run_translation(job_id: str, *, verbose: bool = False) -> Job:
             cache_save=_save_cache,
             cache_model=settings.ollama_model,
         )
+
+        use_refinement = settings.refinement_enabled if refine is None else refine
+        if use_refinement:
+            job.status = JobStatus.refining
+            store.save_job(job)
+            if verbose:
+                _log(f"[{job_id}] Refining translations (critic/repair loop)...")
+
+            def _on_refinement_progress(segments, done, total):
+                now = time.time()
+                if now - last_save[0] < 2.0 and done < total:
+                    return
+                last_save[0] = now
+                job.segments = segments
+                store.save_job(job)
+
+            job.segments, refinement_summary = refinement_agent.refine_segments(
+                job.segments,
+                job,
+                enabled=use_refinement,
+                verbose=verbose,
+                on_progress=_on_refinement_progress,
+                log_path=job_dir / "refinement_log.json",
+            )
+            if verbose:
+                _log(
+                    f"[{job_id}] Refinement done: "
+                    f"{refinement_summary.total_flagged} flagged, "
+                    f"{refinement_summary.total_repaired} repaired, "
+                    f"{refinement_summary.iterations} iteration(s)"
+                )
+
         job.segments = qa.flag_segments(job.segments)
         output.write_output(job, job_dir)
 
@@ -164,17 +199,17 @@ def run_translation(job_id: str, *, verbose: bool = False) -> Job:
     return job
 
 
-def run_job(job_id: str, *, verbose: bool = False) -> Job:
+def run_job(job_id: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:
     """Full pipeline: transcription then translation, without a review pause."""
     job = run_transcription(job_id, verbose=verbose)
     if job.status == JobStatus.failed:
         return job
-    return run_translation(job_id, verbose=verbose)
+    return run_translation(job_id, verbose=verbose, refine=refine)
 
 
-def create_and_run(youtube_url: str, *, verbose: bool = False) -> Job:
+def create_and_run(youtube_url: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:
     job = store.create_job(youtube_url)
-    return run_job(job.id, verbose=verbose)
+    return run_job(job.id, verbose=verbose, refine=refine)
 
 
 def create_and_transcribe(youtube_url: str, *, verbose: bool = False) -> Job:

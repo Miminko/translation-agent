@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     ytdlp_cookies_from_browser: Optional[str] = None  # e.g. chrome, safari, firefox
     ytdlp_cookies_file: Optional[str] = None          # path to Netscape cookies.txt
     use_artifact_cache: bool = True                     # reuse download/transcribe artifacts per URL
+    refinement_enabled: bool = True                     # critic/repair loop after translation
+    refinement_confidence_threshold: float = 0.7        # re-translate segments below this score
+    refinement_max_iterations: int = 2                  # max critique→repair cycles
 
     @field_validator("openai_api_key", "ytdlp_cookies_from_browser", "ytdlp_cookies_file", mode="before")
     @classmethod

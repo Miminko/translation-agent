@@ -11,8 +11,10 @@ def flag_segments(segments: List[Segment]) -> List[Segment]:
         flags = list(segment.flags)
         if segment.confidence is not None and segment.confidence < 0.7:
             if "low_confidence" not in flags:
-                # QA warning: Whisper wasn't confident about the transcription
                 flags.append("low_confidence")
+        if segment.translation_confidence is not None and segment.translation_confidence < 0.7:
+            if "low_translation_confidence" not in flags:
+                flags.append("low_translation_confidence")
         if segment.english is not None:
             ja_len = len(segment.japanese.strip())
             en_len = len(segment.english.strip())
