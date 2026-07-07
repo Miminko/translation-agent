@@ -1,13 +1,29 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 from config import settings
 from state.models import Job, JobStatus, Segment
+
+RUNNING_JOB_STATUSES = {
+    JobStatus.downloading,
+    JobStatus.transcribing,
+    JobStatus.segmenting,
+    JobStatus.translating,
+    JobStatus.refining,
+}
+
+STALE_RUNNING_GRACE_SECONDS = 30
+
+
+class JobLockError(RuntimeError):
+    """Raised when a job already has an active runner."""
 
 
 def _jobs_root(*, create: bool = True) -> Path:
@@ -34,6 +50,102 @@ def job_dir(job_id: str) -> Path:
 def _job_path(job_id: str, *, create_dir: bool = False) -> Path:
     root = _jobs_root(create=create_dir)
     return root / _validate_job_id(job_id) / "job.json"
+
+
+def _lock_path(job_id: str, *, create_dir: bool = False) -> Path:
+    root = _jobs_root(create=create_dir)
+    job_path = root / _validate_job_id(job_id)
+    if create_dir:
+        job_path.mkdir(parents=True, exist_ok=True)
+    return job_path / "job.lock"
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _read_lock(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, ValueError):
+        return {}
+
+
+def _lock_is_active(path: Path) -> bool:
+    if not path.exists():
+        return False
+    pid = _read_lock(path).get("pid")
+    if isinstance(pid, int) and _pid_is_running(pid):
+        return True
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    return False
+
+
+@contextmanager
+def job_lock(job_id: str) -> Iterator[None]:
+    """Hold an exclusive per-job lock for the duration of a pipeline run."""
+    path = _lock_path(job_id, create_dir=True)
+    token = str(uuid.uuid4())
+    payload = {
+        "pid": os.getpid(),
+        "token": token,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    while True:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            break
+        except FileExistsError as exc:
+            if not _lock_is_active(path):
+                continue
+            raise JobLockError(f"Job is already running: {job_id}") from exc
+    try:
+        yield
+    finally:
+        current = _read_lock(path)
+        if current.get("token") == token:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def is_job_locked(job_id: str) -> bool:
+    path = _lock_path(job_id, create_dir=False)
+    return _lock_is_active(path)
+
+
+def recover_stale_running_job(
+    job: Job,
+    *,
+    stale_after_seconds: int = STALE_RUNNING_GRACE_SECONDS,
+) -> bool:
+    """Mark abandoned running jobs as failed so they can be re-run."""
+    if job.status not in RUNNING_JOB_STATUSES:
+        return False
+    if is_job_locked(job.id):
+        return False
+    now = datetime.now(timezone.utc)
+    age = (now - job.updated_at).total_seconds()
+    if age < stale_after_seconds:
+        return False
+    job.status = JobStatus.failed
+    job.error = "Job was interrupted before it finished. Re-run the desired phase."
+    save_job(job)
+    return True
 
 
 def create_job(youtube_url: str) -> Job:

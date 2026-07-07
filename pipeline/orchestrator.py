@@ -26,7 +26,7 @@ def _record_failure(job: Job, job_dir, exc: Exception, *, verbose: bool) -> None
         _log(f"[{job.id}] Traceback written to {job_dir / 'error.log'}")
 
 
-def run_transcription(job_id: str, *, verbose: bool = False) -> Job:
+def _run_transcription_unlocked(job_id: str, *, verbose: bool = False) -> Job:
     """Phase 1: download + transcribe + segment, then pause for review.
 
     Writes an editable `segments.json` and leaves the job in the `transcribed`
@@ -110,7 +110,7 @@ def run_transcription(job_id: str, *, verbose: bool = False) -> Job:
     return job
 
 
-def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:
+def _run_translation_unlocked(job_id: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:
     """Phase 2: translate reviewed segments, optional critic/repair loop, write outputs."""
     from agents import refinement as refinement_agent
 
@@ -223,12 +223,23 @@ def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool
     return job
 
 
+def run_transcription(job_id: str, *, verbose: bool = False) -> Job:
+    with store.job_lock(job_id):
+        return _run_transcription_unlocked(job_id, verbose=verbose)
+
+
+def run_translation(job_id: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:
+    with store.job_lock(job_id):
+        return _run_translation_unlocked(job_id, verbose=verbose, refine=refine)
+
+
 def run_job(job_id: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:
     """Full pipeline: transcription then translation, without a review pause."""
-    job = run_transcription(job_id, verbose=verbose)
-    if job.status == JobStatus.failed:
-        return job
-    return run_translation(job_id, verbose=verbose, refine=refine)
+    with store.job_lock(job_id):
+        job = _run_transcription_unlocked(job_id, verbose=verbose)
+        if job.status == JobStatus.failed:
+            return job
+        return _run_translation_unlocked(job_id, verbose=verbose, refine=refine)
 
 
 def create_and_run(youtube_url: str, *, verbose: bool = False, refine: Optional[bool] = None) -> Job:

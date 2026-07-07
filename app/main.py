@@ -20,13 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-RUNNING_STATUSES = {
-    JobStatus.downloading,
-    JobStatus.transcribing,
-    JobStatus.segmenting,
-    JobStatus.translating,
-    JobStatus.refining,
-}
+RUNNING_STATUSES = store.RUNNING_JOB_STATUSES
 
 
 class CreateJobRequest(BaseModel):
@@ -68,8 +62,17 @@ def _get_job_or_404(job_id: str) -> Job:
 
 
 def _ensure_not_running(job: Job) -> None:
+    store.recover_stale_running_job(job)
     if job.status in RUNNING_STATUSES:
         raise HTTPException(status_code=409, detail=f"Job is already running ({job.status.value})")
+    if store.is_job_locked(job.id):
+        raise HTTPException(status_code=409, detail="Job is already running")
+
+
+def _mark_started(job: Job, status: JobStatus) -> None:
+    job.status = status
+    job.error = None
+    store.save_job(job)
 
 
 @app.get("/health")
@@ -86,10 +89,12 @@ def create_job(request: CreateJobRequest, background_tasks: BackgroundTasks) -> 
 
     if request.auto_start == "transcribe":
         job = store.create_job(str(request.youtube_url))
+        _mark_started(job, JobStatus.downloading)
         background_tasks.add_task(run_transcription, job.id)
         return {"job_id": job.id, "status": JobStatus.downloading.value}
 
     job = store.create_job(str(request.youtube_url))
+    _mark_started(job, JobStatus.downloading)
     background_tasks.add_task(run_job, job.id)
     return {"job_id": job.id, "status": JobStatus.downloading.value}
 
@@ -101,6 +106,7 @@ def create_and_start_transcription(
 ) -> dict:
     """Create a job and start transcription only (phase 1)."""
     job = store.create_job(str(request.youtube_url))
+    _mark_started(job, JobStatus.downloading)
     background_tasks.add_task(run_transcription, job.id)
     return {"job_id": job.id, "status": JobStatus.downloading.value}
 
@@ -129,6 +135,7 @@ def start_transcription(job_id: str, background_tasks: BackgroundTasks) -> dict:
     """Run phase 1: download + transcribe + segment. Ends at status transcribed."""
     job = _get_job_or_404(job_id)
     _ensure_not_running(job)
+    _mark_started(job, JobStatus.downloading)
     background_tasks.add_task(run_transcription, job.id)
     return {"job_id": job.id, "status": JobStatus.downloading.value}
 
@@ -152,6 +159,7 @@ def start_translation(
             detail="No segments to translate. Run POST /jobs/{job_id}/transcribe first.",
         )
     refine = body.refine if body else None
+    _mark_started(job, JobStatus.translating)
     background_tasks.add_task(run_translation, job.id, refine=refine)
     return {"job_id": job.id, "status": JobStatus.translating.value}
 
@@ -161,6 +169,7 @@ def start_full_pipeline(job_id: str, background_tasks: BackgroundTasks) -> dict:
     """Run full pipeline: transcribe then translate (no review pause)."""
     job = _get_job_or_404(job_id)
     _ensure_not_running(job)
+    _mark_started(job, JobStatus.downloading)
     background_tasks.add_task(run_job, job.id)
     return {"job_id": job.id, "status": JobStatus.downloading.value}
 

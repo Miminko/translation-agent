@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from state import store
@@ -36,6 +38,41 @@ def test_save_job_updates_timestamp(tmp_data_dir) -> None:
     reloaded = store.load_job(job.id)
     assert reloaded.status == JobStatus.downloading
     assert reloaded.updated_at >= original_updated
+
+
+def test_job_lock_blocks_concurrent_runner(tmp_data_dir) -> None:
+    job = store.create_job("https://vimeo.com/lock")
+
+    with store.job_lock(job.id):
+        assert store.is_job_locked(job.id) is True
+        with pytest.raises(store.JobLockError):
+            with store.job_lock(job.id):
+                pass
+
+    assert store.is_job_locked(job.id) is False
+
+
+def test_recover_stale_running_job_marks_failed(tmp_data_dir) -> None:
+    job = store.create_job("https://vimeo.com/stale")
+    job.status = JobStatus.translating
+    job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+
+    recovered = store.recover_stale_running_job(job, stale_after_seconds=30)
+
+    assert recovered is True
+    assert job.status == JobStatus.failed
+    assert "interrupted" in (job.error or "")
+
+
+def test_recover_recent_running_job_keeps_status(tmp_data_dir) -> None:
+    job = store.create_job("https://vimeo.com/recent")
+    job.status = JobStatus.translating
+    job.updated_at = datetime.now(timezone.utc)
+
+    recovered = store.recover_stale_running_job(job, stale_after_seconds=30)
+
+    assert recovered is False
+    assert job.status == JobStatus.translating
 
 
 def test_list_jobs(tmp_data_dir) -> None:
